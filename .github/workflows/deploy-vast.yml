@@ -58,16 +58,16 @@ jobs:
           script: |
             export PATH="/root/.bun/bin:$PATH"
             cd /root/hyperscape
-            # Write DATABASE_URL to .env if provided via secret
+            # Explicitly checkout main first to ensure we get the latest deploy script
+            git fetch origin
+            git checkout main
+            git reset --hard origin/main
+            # Write DATABASE_URL to .env AFTER git reset so it's not overwritten
             if [ -n "$DATABASE_URL" ]; then
               echo "[deploy] Writing DATABASE_URL to packages/server/.env"
               mkdir -p /root/hyperscape/packages/server
               echo "DATABASE_URL=$DATABASE_URL" > /root/hyperscape/packages/server/.env
             fi
-            # Explicitly checkout main first to ensure we get the latest deploy script
-            git fetch origin
-            git checkout main
-            git reset --hard origin/main
             # Now run the deploy script (which will also pull, but we've ensured it's on main)
             bash /root/hyperscape/scripts/deploy-vast.sh
         env:
