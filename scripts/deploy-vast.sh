@@ -216,6 +216,11 @@ echo "════════════════════════�
 # ── Diagnostic: Check streaming status ────────────────────────
 echo ""
 echo "[deploy] ═══ STREAMING DIAGNOSTICS ═══"
+
+# Wait for streaming to initialize (RTMP bridge takes time to start)
+echo "[deploy] Waiting 30s for streaming to initialize..."
+sleep 30
+
 echo "[deploy] Checking streaming API..."
 STREAMING_STATE=$(curl -s "http://localhost:5555/api/streaming/state" --max-time 10 2>/dev/null || echo '{"error": "curl failed"}')
 echo "[deploy] Streaming state: $STREAMING_STATE"
@@ -226,8 +231,24 @@ CLIENT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:3333" -
 echo "[deploy] Game client status: $CLIENT_STATUS"
 
 echo ""
-echo "[deploy] Recent PM2 logs (last 100 lines):"
-bunx pm2 logs hyperscape-duel --nostream --lines 100 2>/dev/null || echo "[deploy] Could not get PM2 logs"
+echo "[deploy] Checking RTMP status file..."
+cat /root/hyperscape/packages/server/public/live/rtmp-status.json 2>/dev/null || echo "[deploy] No RTMP status file found"
+
+echo ""
+echo "[deploy] Checking for FFmpeg processes..."
+ps aux | grep -i ffmpeg | grep -v grep || echo "[deploy] No FFmpeg processes running"
+
+echo ""
+echo "[deploy] Checking for running stream processes..."
+ps aux | grep -E "stream-to-rtmp|rtmp-bridge" | grep -v grep || echo "[deploy] No stream processes found"
+
+echo ""
+echo "[deploy] Recent PM2 logs (last 200 lines, filtered for streaming):"
+bunx pm2 logs hyperscape-duel --nostream --lines 200 2>/dev/null | grep -iE "rtmp|ffmpeg|stream|capture|destination|twitch|kick|frame|fps|bitrate|error" | tail -100 || echo "[deploy] Could not get filtered PM2 logs"
+
+echo ""
+echo "[deploy] Full recent PM2 error logs:"
+bunx pm2 logs hyperscape-duel --nostream --lines 50 --err 2>/dev/null || echo "[deploy] Could not get PM2 error logs"
 
 echo ""
 echo "[deploy] ═══ END DIAGNOSTICS ═══"
