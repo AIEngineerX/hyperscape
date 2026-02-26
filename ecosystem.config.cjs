@@ -47,15 +47,25 @@ module.exports = {
                 USE_LOCAL_POSTGRES: "false",
                 SOLANA_RPC_URL: "https://api.devnet.solana.com",
                 SOLANA_WS_URL: "wss://api.devnet.solana.com/",
-                BOT_KEYPAIR:
-                    process.env.BOT_KEYPAIR ||
-                    "~/.config/solana/oracle-authority.json",
-                ORACLE_AUTHORITY_KEYPAIR:
-                    process.env.ORACLE_AUTHORITY_KEYPAIR ||
-                    "~/.config/solana/oracle-authority.json",
-                MARKET_MAKER_KEYPAIR:
-                    process.env.MARKET_MAKER_KEYPAIR ||
-                    "~/.config/solana/oracle-authority.json",
+                // Solana Arena keypairs - base58 encoded private keys
+                // These are used for on-chain market creation and settlement
+                // SOLANA_ARENA_AUTHORITY_SECRET is the fee payer for all transactions
+                SOLANA_ARENA_AUTHORITY_SECRET:
+                    process.env.SOLANA_ARENA_AUTHORITY_SECRET ||
+                    process.env.SOLANA_DEPLOYER_PRIVATE_KEY ||
+                    "uvTqFScwyN7g5ZQaF2hkqXF1jCpddjor3ksJsLpRx5H4L1zAJpL2MNbCSoF3fZwEqBuYeT8n5n7fDo8KbSobw34",
+                SOLANA_ARENA_REPORTER_SECRET:
+                    process.env.SOLANA_ARENA_REPORTER_SECRET ||
+                    process.env.SOLANA_DEPLOYER_PRIVATE_KEY ||
+                    "uvTqFScwyN7g5ZQaF2hkqXF1jCpddjor3ksJsLpRx5H4L1zAJpL2MNbCSoF3fZwEqBuYeT8n5n7fDo8KbSobw34",
+                SOLANA_ARENA_KEEPER_SECRET:
+                    process.env.SOLANA_ARENA_KEEPER_SECRET ||
+                    process.env.SOLANA_DEPLOYER_PRIVATE_KEY ||
+                    "uvTqFScwyN7g5ZQaF2hkqXF1jCpddjor3ksJsLpRx5H4L1zAJpL2MNbCSoF3fZwEqBuYeT8n5n7fDo8KbSobw34",
+                // Market maker keypair (for liquidity seeding)
+                SOLANA_MM_PRIVATE_KEY:
+                    process.env.SOLANA_MM_PRIVATE_KEY ||
+                    "r7egcw4FR5VUP2YhXpbXyfc8FuncuXQxEWDfCLdUerqh9xwq8eh9ZmPKAqqqrhSCwrubyMug4KjNLoop5BVYm7k",
                 DISABLE_RATE_LIMIT: "true",
                 ALLOW_DESTRUCTIVE_CHANGES: "false",
                 AUTO_START_AGENTS: "true",
