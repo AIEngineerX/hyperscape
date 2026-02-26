@@ -90,6 +90,7 @@ jobs:
             cat > /tmp/hyperscape-secrets.env << 'ENVEOF'
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             JWT_SECRET=${{ secrets.JWT_SECRET }}
+            ARENA_EXTERNAL_BET_WRITE_KEY=${{ secrets.ARENA_EXTERNAL_BET_WRITE_KEY }}
             TWITCH_STREAM_KEY=${{ secrets.TWITCH_STREAM_KEY }}
             X_STREAM_KEY=${{ secrets.X_STREAM_KEY }}
             X_RTMP_URL=${{ secrets.X_RTMP_URL }}
