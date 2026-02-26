@@ -1,5 +1,6 @@
 /**
  * index.tsx - Hyperscape Client Entry Point
+ * @build 2026-02-25 - Packet sync rebuild
  *
  * Main entry point for the Hyperscape browser client. Initializes the React application,
  * authentication, and 3D game world. Handles the complete client lifecycle from login
