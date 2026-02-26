@@ -11,7 +11,7 @@
  * efficiently (single encode, multiple outputs).
  */
 
-import { spawn, exec, type ChildProcess } from "child_process";
+import { spawn, exec, execSync, type ChildProcess } from "child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
@@ -809,7 +809,6 @@ export class RTMPBridge {
     // Check if PulseAudio is actually accessible before trying to use it
     if (usePulseAudio) {
       try {
-        const { execSync } = await import("child_process");
         // Test if we can access PulseAudio - pactl info will fail if not
         execSync("pactl info", { timeout: 2000, stdio: "pipe" });
         // Also verify the specific sink exists
