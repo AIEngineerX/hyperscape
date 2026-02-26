@@ -40,6 +40,9 @@ else
         [ -n "$X_RTMP_URL" ] && echo "X_RTMP_URL=$X_RTMP_URL"
         [ -n "$KICK_STREAM_KEY" ] && echo "KICK_STREAM_KEY=$KICK_STREAM_KEY"
         [ -n "$KICK_RTMP_URL" ] && echo "KICK_RTMP_URL=$KICK_RTMP_URL"
+        [ -n "$SOLANA_DEPLOYER_PRIVATE_KEY" ] && echo "SOLANA_DEPLOYER_PRIVATE_KEY=$SOLANA_DEPLOYER_PRIVATE_KEY"
+        # Always disable YouTube
+        echo "YOUTUBE_STREAM_KEY="
     } > /root/hyperscape/packages/server/.env
 fi
 echo "[deploy] Environment variables configured"
@@ -164,6 +167,7 @@ if [ -f "/root/hyperscape/packages/server/.env" ]; then
     source /root/hyperscape/packages/server/.env
     set +a
     echo "[deploy] DATABASE_URL is ${DATABASE_URL:+configured}${DATABASE_URL:-NOT SET}"
+    echo "[deploy] SOLANA_DEPLOYER_PRIVATE_KEY is ${SOLANA_DEPLOYER_PRIVATE_KEY:+configured}${SOLANA_DEPLOYER_PRIVATE_KEY:-NOT SET}"
 else
     echo "[deploy] WARNING: No packages/server/.env file found"
 fi
@@ -210,8 +214,9 @@ cd ../..
 
 # ── Tear down existing processes ──────────────────────────────
 echo "[deploy] Tearing down existing processes..."
-# Stop pm2-managed processes first
-bunx pm2 delete ecosystem.config.cjs 2>/dev/null || true
+# Kill PM2 daemon completely so it picks up new environment on restart
+# This is critical - pm2 delete only removes processes, not the daemon's cached env
+bunx pm2 kill 2>/dev/null || true
 # Also clean up any legacy processes from the old watchdog
 pkill -f "watchdog.sh" || true
 pkill -f "bun.*build/index" || true

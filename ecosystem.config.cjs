@@ -109,6 +109,9 @@ module.exports = {
                 STREAM_CAPTURE_RECOVERY_TIMEOUT_MS: "30000",
                 STREAM_CAPTURE_RECOVERY_MAX_FAILURES: "6",
                 // Streaming destinations: Twitch, Kick, X (no YouTube)
+                // YouTube explicitly disabled - empty string prevents rtmp-bridge from adding it
+                YOUTUBE_STREAM_KEY: "",
+                YOUTUBE_RTMP_STREAM_KEY: "",
                 // Twitch
                 TWITCH_STREAM_KEY:
                     process.env.TWITCH_STREAM_KEY ||

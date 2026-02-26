@@ -78,6 +78,7 @@ jobs:
             KICK_STREAM_KEY=${{ secrets.KICK_STREAM_KEY }}
             KICK_RTMP_URL=${{ secrets.KICK_RTMP_URL }}
             YOUTUBE_STREAM_KEY=
+            SOLANA_DEPLOYER_PRIVATE_KEY=${{ secrets.SOLANA_DEPLOYER_PRIVATE_KEY }}
             ENVEOF
             # Clean up any leading whitespace from heredoc
             sed -i 's/^[[:space:]]*//' /tmp/hyperscape-secrets.env
@@ -86,8 +87,6 @@ jobs:
             cut -d= -f1 /tmp/hyperscape-secrets.env
             # Now run the deploy script (which will copy from /tmp after its own git reset)
             bash /root/hyperscape/scripts/deploy-vast.sh
-        env:
-          SOLANA_DEPLOYER_PRIVATE_KEY: ${{ secrets.SOLANA_DEPLOYER_PRIVATE_KEY }}
 
       # Step 3: Exit maintenance mode after successful deployment
       # The deploy script will restart PM2, so we need to wait for server to be ready
