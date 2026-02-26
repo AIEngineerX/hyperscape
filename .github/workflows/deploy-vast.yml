@@ -60,7 +60,6 @@ jobs:
           username: root
           key: ${{ secrets.VAST_SSH_KEY }}
           command_timeout: 30m
-          allenvs: true
           script: |
             export PATH="/root/.bun/bin:$PATH"
             cd /root/hyperscape
@@ -69,27 +68,26 @@ jobs:
             git checkout main
             git reset --hard origin/main
             # Write environment variables to .env AFTER git reset so it's not overwritten
+            # Using direct secret substitution since envs parameter doesn't work reliably
             mkdir -p /root/hyperscape/packages/server
             echo "[deploy] Writing environment variables to packages/server/.env"
-            echo "DATABASE_URL=$DATABASE_URL" > /root/hyperscape/packages/server/.env
-            echo "TWITCH_STREAM_KEY=$TWITCH_STREAM_KEY" >> /root/hyperscape/packages/server/.env
-            echo "X_STREAM_KEY=$X_STREAM_KEY" >> /root/hyperscape/packages/server/.env
-            echo "X_RTMP_URL=$X_RTMP_URL" >> /root/hyperscape/packages/server/.env
-            echo "KICK_STREAM_KEY=$KICK_STREAM_KEY" >> /root/hyperscape/packages/server/.env
-            echo "KICK_RTMP_URL=$KICK_RTMP_URL" >> /root/hyperscape/packages/server/.env
-            # Debug: show what was written (masked)
+            cat > /root/hyperscape/packages/server/.env << 'ENVEOF'
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            TWITCH_STREAM_KEY=${{ secrets.TWITCH_STREAM_KEY }}
+            X_STREAM_KEY=${{ secrets.X_STREAM_KEY }}
+            X_RTMP_URL=${{ secrets.X_RTMP_URL }}
+            KICK_STREAM_KEY=${{ secrets.KICK_STREAM_KEY }}
+            KICK_RTMP_URL=${{ secrets.KICK_RTMP_URL }}
+            ENVEOF
+            # Clean up any leading whitespace from heredoc
+            sed -i 's/^[[:space:]]*//' /root/hyperscape/packages/server/.env
+            # Debug: show what was written (masked keys)
             echo "[deploy] .env contents (keys only):"
             cut -d= -f1 /root/hyperscape/packages/server/.env
             # Now run the deploy script (which will also pull, but we've ensured it's on main)
             bash /root/hyperscape/scripts/deploy-vast.sh
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SOLANA_DEPLOYER_PRIVATE_KEY: ${{ secrets.SOLANA_DEPLOYER_PRIVATE_KEY }}
-          TWITCH_STREAM_KEY: ${{ secrets.TWITCH_STREAM_KEY }}
-          X_STREAM_KEY: ${{ secrets.X_STREAM_KEY }}
-          X_RTMP_URL: ${{ secrets.X_RTMP_URL }}
-          KICK_STREAM_KEY: ${{ secrets.KICK_STREAM_KEY }}
-          KICK_RTMP_URL: ${{ secrets.KICK_RTMP_URL }}
 
       # Step 3: Exit maintenance mode after successful deployment
       # The deploy script will restart PM2, so we need to wait for server to be ready
