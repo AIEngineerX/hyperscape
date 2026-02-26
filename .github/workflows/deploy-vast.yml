@@ -71,14 +71,15 @@ jobs:
             # Write environment variables to .env AFTER git reset so it's not overwritten
             mkdir -p /root/hyperscape/packages/server
             echo "[deploy] Writing environment variables to packages/server/.env"
-            {
-              [ -n "$DATABASE_URL" ] && echo "DATABASE_URL=$DATABASE_URL"
-              [ -n "$TWITCH_STREAM_KEY" ] && echo "TWITCH_STREAM_KEY=$TWITCH_STREAM_KEY"
-              [ -n "$X_STREAM_KEY" ] && echo "X_STREAM_KEY=$X_STREAM_KEY"
-              [ -n "$X_RTMP_URL" ] && echo "X_RTMP_URL=$X_RTMP_URL"
-              [ -n "$KICK_STREAM_KEY" ] && echo "KICK_STREAM_KEY=$KICK_STREAM_KEY"
-              [ -n "$KICK_RTMP_URL" ] && echo "KICK_RTMP_URL=$KICK_RTMP_URL"
-            } > /root/hyperscape/packages/server/.env
+            echo "DATABASE_URL=$DATABASE_URL" > /root/hyperscape/packages/server/.env
+            echo "TWITCH_STREAM_KEY=$TWITCH_STREAM_KEY" >> /root/hyperscape/packages/server/.env
+            echo "X_STREAM_KEY=$X_STREAM_KEY" >> /root/hyperscape/packages/server/.env
+            echo "X_RTMP_URL=$X_RTMP_URL" >> /root/hyperscape/packages/server/.env
+            echo "KICK_STREAM_KEY=$KICK_STREAM_KEY" >> /root/hyperscape/packages/server/.env
+            echo "KICK_RTMP_URL=$KICK_RTMP_URL" >> /root/hyperscape/packages/server/.env
+            # Debug: show what was written (masked)
+            echo "[deploy] .env contents (keys only):"
+            cut -d= -f1 /root/hyperscape/packages/server/.env
             # Now run the deploy script (which will also pull, but we've ensured it's on main)
             bash /root/hyperscape/scripts/deploy-vast.sh
         env:
