@@ -161,14 +161,8 @@
     "vitest": "^4.0.6"
   },
   "peerDependencies": {
-    "@hyperscape/procgen": "workspace:*",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3"
-  },
-  "peerDependenciesMeta": {
-    "@hyperscape/procgen": {
-      "optional": true
-    }
   },
   "engines": {
     "node": ">=22.11.0",

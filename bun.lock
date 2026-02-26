@@ -465,13 +465,11 @@
         "vitest": "^4.0.6",
       },
       "peerDependencies": {
-        "@hyperscape/shared": "workspace:*",
         "react": "19.2.4",
         "react-dom": "19.2.4",
         "three": ">=0.182.0",
       },
       "optionalPeers": [
-        "@hyperscape/shared",
         "react",
         "react-dom",
       ],
@@ -637,13 +635,9 @@
         "vitest": "^4.0.6",
       },
       "peerDependencies": {
-        "@hyperscape/procgen": "workspace:*",
         "@types/react": "^19.2.14",
         "@types/react-dom": "^19.2.3",
       },
-      "optionalPeers": [
-        "@hyperscape/procgen",
-      ],
     },
     "packages/sim-engine": {
       "name": "@hyperscape/sim-engine",
