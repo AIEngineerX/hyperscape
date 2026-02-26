@@ -155,6 +155,24 @@ nohup socat TCP-LISTEN:35079,reuseaddr,fork TCP:127.0.0.1:5555 > /dev/null 2>&1 
 nohup socat TCP-LISTEN:35144,reuseaddr,fork TCP:127.0.0.1:8080 > /dev/null 2>&1 &
 echo "[deploy] Port proxies running"
 
+# ── Export stream keys before PM2 start ─────────────────────
+# These MUST be exported so ecosystem.config.cjs picks them up
+# Clear any old/stale stream keys from the environment first
+echo "[deploy] Configuring stream keys..."
+unset TWITCH_STREAM_KEY X_STREAM_KEY X_RTMP_URL 2>/dev/null || true
+
+# Re-source .env to get the correct stream keys
+if [ -f "/root/hyperscape/packages/server/.env" ]; then
+    set -a
+    source /root/hyperscape/packages/server/.env
+    set +a
+fi
+
+# Log which keys are configured (masked for security)
+echo "[deploy] TWITCH_STREAM_KEY: ${TWITCH_STREAM_KEY:+***configured***}${TWITCH_STREAM_KEY:-NOT SET}"
+echo "[deploy] X_STREAM_KEY: ${X_STREAM_KEY:+***configured***}${X_STREAM_KEY:-NOT SET}"
+echo "[deploy] X_RTMP_URL: ${X_RTMP_URL:+***configured***}${X_RTMP_URL:-NOT SET}"
+
 # ── Start duel stack via pm2 ─────────────────────────────────
 echo "[deploy] Starting Hyperscape duel stack via pm2..."
 bunx pm2 start ecosystem.config.cjs
