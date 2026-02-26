@@ -60,7 +60,7 @@ jobs:
           username: root
           key: ${{ secrets.VAST_SSH_KEY }}
           command_timeout: 30m
-          envs: DATABASE_URL,SOLANA_DEPLOYER_PRIVATE_KEY,TWITCH_STREAM_KEY,X_STREAM_KEY,X_RTMP_URL,KICK_STREAM_KEY,KICK_RTMP_URL
+          allenvs: true
           script: |
             export PATH="/root/.bun/bin:$PATH"
             cd /root/hyperscape
