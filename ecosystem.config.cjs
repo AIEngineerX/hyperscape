@@ -103,7 +103,8 @@ module.exports = {
                 // Audio streaming configuration
                 STREAM_AUDIO_ENABLED: "true",
                 PULSE_AUDIO_DEVICE: "chrome_audio.monitor",
-                PULSE_SERVER: "unix:/run/pulse/native",
+                PULSE_SERVER: "unix:/tmp/pulse-runtime/pulse/native",
+                XDG_RUNTIME_DIR: "/tmp/pulse-runtime",
                 // Stream health monitoring
                 STREAM_CAPTURE_RECOVERY_TIMEOUT_MS: "30000",
                 STREAM_CAPTURE_RECOVERY_MAX_FAILURES: "6",

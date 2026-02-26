@@ -85,46 +85,56 @@ fi
 
 # ── Setup PulseAudio for audio capture ────────────────────────
 echo "[deploy] Setting up PulseAudio for audio streaming..."
+
 # Kill any existing PulseAudio
 pulseaudio --kill 2>/dev/null || true
-sleep 1
-
-# Add root to pulse-access group for system-wide PulseAudio access
-groupadd -f pulse-access 2>/dev/null || true
-usermod -aG pulse-access root 2>/dev/null || true
-
-# Create PulseAudio runtime directory with proper permissions
-mkdir -p /run/pulse
-chmod 777 /run/pulse
-
-# Start PulseAudio in system-wide mode (no dbus required)
-# Use --high-priority=no to avoid permission issues
-pulseaudio --system --disallow-exit --disallow-module-loading=false --high-priority=no --realtime=no --daemonize 2>/dev/null || true
+pkill -9 pulseaudio 2>/dev/null || true
 sleep 2
 
-# Set socket permissions to allow all users
-chmod 777 /run/pulse/native 2>/dev/null || true
+# Setup XDG runtime directory for user-mode PulseAudio
+export XDG_RUNTIME_DIR=/tmp/pulse-runtime
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
 
-# Create a virtual sink for Chrome to output to (can be captured by FFmpeg)
-pactl load-module module-null-sink sink_name=chrome_audio sink_properties=device.description="ChromeAudio" 2>/dev/null || true
+# Create PulseAudio config directory
+mkdir -p /root/.config/pulse
 
-# Set the virtual sink as default
-pactl set-default-sink chrome_audio 2>/dev/null || true
+# Create a minimal PulseAudio config that loads the null sink automatically
+cat > /root/.config/pulse/default.pa << 'PULSEEOF'
+.fail
+load-module module-null-sink sink_name=chrome_audio sink_properties=device.description="ChromeAudio"
+set-default-sink chrome_audio
+load-module module-native-protocol-unix auth-anonymous=1
+PULSEEOF
 
-# Allow anonymous access to PulseAudio (required for FFmpeg)
-pactl load-module module-native-protocol-unix auth-anonymous=1 socket=/run/pulse/native-anon 2>/dev/null || true
+# Start PulseAudio in user mode (more reliable than system mode)
+pulseaudio --start --exit-idle-time=-1 --daemonize=yes 2>&1 || true
+sleep 3
 
-# Verify PulseAudio is running
+# Verify PulseAudio is running and has the sink
 if pulseaudio --check 2>/dev/null; then
-    echo "[deploy] PulseAudio is running"
+    echo "[deploy] PulseAudio is running in user mode"
     pactl list short sinks 2>/dev/null || true
-    ls -la /run/pulse/ 2>/dev/null || true
+    # Double-check the chrome_audio sink exists
+    if pactl list short sinks 2>/dev/null | grep -q chrome_audio; then
+        echo "[deploy] chrome_audio sink is available"
+    else
+        echo "[deploy] Creating chrome_audio sink manually..."
+        pactl load-module module-null-sink sink_name=chrome_audio sink_properties=device.description="ChromeAudio" 2>/dev/null || true
+        pactl set-default-sink chrome_audio 2>/dev/null || true
+    fi
 else
-    echo "[deploy] WARNING: PulseAudio failed to start - audio will be silent"
+    echo "[deploy] WARNING: PulseAudio failed to start - trying fallback..."
+    # Fallback: try starting without config
+    pulseaudio -D --exit-idle-time=-1 2>&1 || true
+    sleep 2
+    pactl load-module module-null-sink sink_name=chrome_audio 2>/dev/null || true
+    pactl set-default-sink chrome_audio 2>/dev/null || true
 fi
 
-# Export PULSE_SERVER for child processes (PM2)
-export PULSE_SERVER=unix:/run/pulse/native
+# Export PULSE_SERVER for child processes
+export PULSE_SERVER="unix:$XDG_RUNTIME_DIR/pulse/native"
+echo "[deploy] PULSE_SERVER=$PULSE_SERVER"
 
 # ── Install Playwright and deps ───────────────────────────────
 export PATH="/root/.bun/bin:$PATH"
@@ -180,6 +190,22 @@ fi
 echo "[deploy] Pushing database schema..."
 cd packages/server
 bunx drizzle-kit push --force
+
+# Warmup database connection pool to avoid cold start issues
+echo "[deploy] Warming up database connection..."
+for i in 1 2 3; do
+    if bun -e "
+        const { Pool } = require('pg');
+        const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
+        pool.query('SELECT 1').then(() => { console.log('DB warmup successful'); pool.end(); process.exit(0); }).catch(e => { console.error('DB warmup failed:', e.message); pool.end(); process.exit(1); });
+    " 2>/dev/null; then
+        echo "[deploy] Database connection verified"
+        break
+    else
+        echo "[deploy] Database warmup attempt $i failed, retrying..."
+        sleep 3
+    fi
+done
 cd ../..
 
 # ── Tear down existing processes ──────────────────────────────
@@ -215,6 +241,9 @@ echo "[deploy] Port proxies running"
 # Clear any old/stale stream keys from the environment first
 echo "[deploy] Configuring stream keys..."
 unset TWITCH_STREAM_KEY X_STREAM_KEY X_RTMP_URL KICK_STREAM_KEY KICK_RTMP_URL 2>/dev/null || true
+# Explicitly disable YouTube (we only stream to Twitch, Kick, X)
+unset YOUTUBE_STREAM_KEY YOUTUBE_RTMP_STREAM_KEY YOUTUBE_STREAM_URL YOUTUBE_RTMP_URL 2>/dev/null || true
+export YOUTUBE_STREAM_KEY=""
 
 # Re-source .env to get the correct stream keys
 if [ -f "/root/hyperscape/packages/server/.env" ]; then
@@ -223,12 +252,17 @@ if [ -f "/root/hyperscape/packages/server/.env" ]; then
     set +a
 fi
 
+# Force disable YouTube even if it was in .env
+unset YOUTUBE_STREAM_KEY YOUTUBE_RTMP_STREAM_KEY 2>/dev/null || true
+export YOUTUBE_STREAM_KEY=""
+
 # Log which keys are configured (masked for security)
 echo "[deploy] TWITCH_STREAM_KEY: ${TWITCH_STREAM_KEY:+***configured***}${TWITCH_STREAM_KEY:-NOT SET}"
 echo "[deploy] X_STREAM_KEY: ${X_STREAM_KEY:+***configured***}${X_STREAM_KEY:-NOT SET}"
 echo "[deploy] X_RTMP_URL: ${X_RTMP_URL:+***configured***}${X_RTMP_URL:-NOT SET}"
 echo "[deploy] KICK_STREAM_KEY: ${KICK_STREAM_KEY:+***configured***}${KICK_STREAM_KEY:-NOT SET}"
 echo "[deploy] KICK_RTMP_URL: ${KICK_RTMP_URL:+***configured***}${KICK_RTMP_URL:-NOT SET}"
+echo "[deploy] YOUTUBE_STREAM_KEY: DISABLED"
 
 # ── Start duel stack via pm2 ─────────────────────────────────
 echo "[deploy] Starting Hyperscape duel stack via pm2..."
