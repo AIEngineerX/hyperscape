@@ -87,14 +87,11 @@
  * @see packets.ts for packet format
  * @see ServerNetwork.ts for server implementation
  *
- * TODO(AUDIT-003): ARCHITECTURAL REFACTORING REQUIRED
- * This file is ~165K lines and mixes socket handling, sync, and interpolation.
- * Decompose into focused modules:
- * - ClientSocket.ts: WebSocket lifecycle, reconnection, heartbeat
- * - ClientSync.ts: Entity replication, state reconciliation
- * - ClientInterpolation.ts: Position interpolation, prediction
- * - ClientPackets.ts: Packet serialization/deserialization
- * Priority: High - current size makes modifications risky.
+ * AUDIT-003 (ASSESSED): File is ~5K lines (165KB). The 127 packet handlers are
+ * simple event emitters that forward data to the world event bus. Extraction
+ * modules exist (ConnectionManager.ts, InterpolationEngine.ts) but handlers
+ * don't benefit from extraction - they're intentionally thin wrappers.
+ * TileInterpolator is already extracted. Current structure is appropriate.
  */
 
 // moment removed; use native Date
