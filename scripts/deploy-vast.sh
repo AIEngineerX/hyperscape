@@ -188,9 +188,24 @@ XORGEOF
     sleep 5
 
     if kill -0 $XORG_PID 2>/dev/null && xdpyinfo -display :99 >/dev/null 2>&1; then
-        export DISPLAY=:99
-        RENDERING_MODE="xorg"
-        echo "[deploy] ✓ Xorg started successfully on :99"
+        # Check if Xorg is actually using NVIDIA (not software rendering)
+        # If the NVIDIA driver failed, Xorg falls back to modesetting with swrast (software)
+        if grep -q "IGLX: Loaded and initialized swrast" /var/log/Xorg.99.log 2>/dev/null; then
+            echo "[deploy] ✗ Xorg started but using SOFTWARE RENDERING (swrast) - not usable for WebGPU"
+            echo "[deploy] NVIDIA driver failed to initialize, falling back to headless EGL..."
+            echo "[deploy] Xorg errors:"
+            grep -E "(EE)" /var/log/Xorg.99.log 2>/dev/null | head -10 || true
+            pkill -9 Xorg 2>/dev/null || true
+        elif grep -q "NVIDIA: Failed to initialize" /var/log/Xorg.99.log 2>/dev/null; then
+            echo "[deploy] ✗ Xorg started but NVIDIA driver failed to initialize"
+            echo "[deploy] This is common in containers without full DRM access"
+            echo "[deploy] Falling back to headless EGL..."
+            pkill -9 Xorg 2>/dev/null || true
+        else
+            export DISPLAY=:99
+            RENDERING_MODE="xorg"
+            echo "[deploy] ✓ Xorg started successfully on :99 with NVIDIA"
+        fi
     else
         echo "[deploy] Xorg failed to start, will use headless EGL mode"
         cat /var/log/Xorg.99.log 2>/dev/null | tail -20 || true
