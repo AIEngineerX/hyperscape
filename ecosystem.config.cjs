@@ -92,10 +92,10 @@ module.exports = {
                 // Use Chrome Dev channel (google-chrome-unstable) for WebGPU support
                 // Playwright channel name mapping: chrome-dev -> google-chrome-unstable
                 STREAM_CAPTURE_CHANNEL: "chrome-dev",
-                // Use swiftshader ANGLE backend (CPU-based OpenGL ES)
-                // Chrome's --enable-unsafe-swiftshader provides software Vulkan for WebGPU
-                // VK_ICD_FILENAMES not needed - Chrome uses its bundled SwiftShader
-                STREAM_CAPTURE_ANGLE: "swiftshader",
+                // Use vulkan ANGLE backend with NVIDIA hardware Vulkan
+                // Force only NVIDIA ICD to avoid conflicts with broken Mesa ICDs
+                VK_ICD_FILENAMES: "/usr/share/vulkan/icd.d/nvidia_icd.json",
+                STREAM_CAPTURE_ANGLE: "vulkan",
                 STREAM_CAPTURE_WIDTH: "1280",
                 STREAM_CAPTURE_HEIGHT: "720",
                 // Enable WebGPU (requires working Vulkan - now using Lavapipe)
