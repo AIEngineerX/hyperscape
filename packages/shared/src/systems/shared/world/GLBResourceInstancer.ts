@@ -1,20 +1,17 @@
 /**
- * GLBTreeInstancer - InstancedMesh-based rendering for GLB-loaded trees.
+ * GLBResourceInstancer — InstancedMesh-based rendering for GLB-loaded resources
+ * (rocks, ores, herbs, and any non-tree, non-fishing-spot resource with a model).
  *
- * Instead of cloning the full GLB scene per tree (which deep-copies all
- * geometry buffers and causes FPS drops), this module loads each model
- * once, extracts its geometry by reference, and renders all instances
- * of that model via a single THREE.InstancedMesh per LOD level.
+ * Modeled on GLBTreeInstancer: loads each model once, extracts geometry by
+ * reference, and renders all instances of that model via a single
+ * THREE.InstancedMesh per LOD level (LOD0 / LOD1 / LOD2).
  *
- * LOD0, LOD1, and LOD2 each get their own InstancedMesh. The instancer
- * performs distance-based LOD switching per-instance every frame by
- * moving instances between pools (matrix swaps + count adjustment).
+ * Distance-based LOD switching per-instance happens every frame by moving
+ * instances between pools (matrix swap-and-pop).
  *
- * ResourceEntity calls addInstance/removeInstance/setDepleted. It does
- * NOT need to track whether it's instanced — those calls are safe no-ops
- * when the entity isn't registered.
+ * InstancedModelVisualStrategy calls addInstance / removeInstance / setDepleted.
  *
- * @module GLBTreeInstancer
+ * @module GLBResourceInstancer
  */
 
 import THREE from "../../../extras/three/three";
@@ -35,7 +32,7 @@ const _quaternion = new THREE.Quaternion();
 const _scale = new THREE.Vector3();
 const _swapMatrix = new THREE.Matrix4();
 
-interface TreeSlot {
+interface ResourceSlot {
   entityId: string;
   position: THREE.Vector3;
   rotation: number;
@@ -49,7 +46,6 @@ interface TreeSlot {
 interface LODPool {
   mesh: THREE.InstancedMesh;
   material: DissolveMaterial;
-  /** entityId → slot index in this pool's InstancedMesh */
   slots: Map<string, number>;
   activeCount: number;
   dirty: boolean;
@@ -61,7 +57,7 @@ interface ModelPool {
   lod1: LODPool | null;
   lod2: LODPool | null;
   depleted: LODPool | null;
-  instances: Map<string, TreeSlot>;
+  instances: Map<string, ResourceSlot>;
   yOffset: number;
   depletedYOffset: number;
   highlightMesh: THREE.Mesh | null;
@@ -70,7 +66,6 @@ interface ModelPool {
 
 const resourceLOD = getLODDistances("resource");
 
-// ---- Module state ----
 let scene: THREE.Scene | null = null;
 let world: World | null = null;
 const pools = new Map<string, ModelPool>();
@@ -82,8 +77,6 @@ function inferLOD1Path(lod0Path: string): string {
 function inferLOD2Path(lod0Path: string): string {
   return lod0Path.replace(/\.glb$/i, "_lod2.glb");
 }
-
-// ---- Geometry extraction (portfolio pattern: reference, not clone) ----
 
 function extractGeometryAndMaterial(
   root: THREE.Object3D,
@@ -132,7 +125,9 @@ function computeYOffset(root: THREE.Object3D, scale: number): number {
   return -bbox.min.y;
 }
 
-// ---- LODPool creation ----
+// ---------------------------------------------------------------------------
+// LODPool creation
+// ---------------------------------------------------------------------------
 
 function createLODPool(
   geometry: THREE.BufferGeometry,
@@ -162,7 +157,9 @@ async function loadLODModel(path: string): Promise<{
   }
 }
 
-// ---- Model pool lifecycle ----
+// ---------------------------------------------------------------------------
+// Model pool lifecycle
+// ---------------------------------------------------------------------------
 
 const pendingEnsure = new Map<string, Promise<ModelPool>>();
 
@@ -196,7 +193,6 @@ async function ensureModelPool(
   if (pending) return pending;
 
   const promise = (async (): Promise<ModelPool> => {
-    // LOD0
     const { scene: lod0Scene } = await modelCache.loadModel(modelPath, world!);
     const lod0Data = extractGeometryAndMaterial(lod0Scene);
     if (!lod0Data) throw new Error(`No mesh found in ${modelPath}`);
@@ -213,13 +209,11 @@ async function ensureModelPool(
     world!.setupMaterial(lod0Material);
     const lod0Pool = createLODPool(lod0Data.geometry, lod0Material);
 
-    // Preload highlight mesh from LOD0 geometry + original material
     const highlightMesh = createHighlightMesh(
       lod0Data.geometry,
       lod0Data.material,
     );
 
-    // LOD1
     let lod1Pool: LODPool | null = null;
     const lod1Data = await loadLODModel(inferLOD1Path(modelPath));
     if (lod1Data) {
@@ -234,7 +228,6 @@ async function ensureModelPool(
       lod1Pool = createLODPool(lod1Data.geometry, lod1Material);
     }
 
-    // LOD2
     let lod2Pool: LODPool | null = null;
     const lod2Data = await loadLODModel(inferLOD2Path(modelPath));
     if (lod2Data) {
@@ -313,7 +306,9 @@ async function loadDepletedPool(
   );
 }
 
-// ---- Instance matrix helper ----
+// ---------------------------------------------------------------------------
+// Instance matrix helpers
+// ---------------------------------------------------------------------------
 
 function composeInstanceMatrix(
   position: THREE.Vector3,
@@ -342,11 +337,9 @@ function removeFromPool(pool: LODPool, entityId: string): void {
 
   const lastIdx = pool.activeCount - 1;
   if (idx !== lastIdx) {
-    // Swap last instance into the removed slot
     pool.mesh.getMatrixAt(lastIdx, _swapMatrix);
     pool.mesh.setMatrixAt(idx, _swapMatrix);
 
-    // Find the entity that owned the last slot and update its index
     for (const [eid, eidIdx] of pool.slots) {
       if (eidIdx === lastIdx) {
         pool.slots.set(eid, idx);
@@ -361,14 +354,16 @@ function removeFromPool(pool: LODPool, entityId: string): void {
   pool.dirty = true;
 }
 
-// ---- Public API ----
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
-export function initGLBTreeInstancer(s: THREE.Scene, w: World): void {
+export function initGLBResourceInstancer(s: THREE.Scene, w: World): void {
   scene = s;
   world = w;
 }
 
-export function destroyGLBTreeInstancer(): void {
+export function destroyGLBResourceInstancer(): void {
   for (const pool of pools.values()) {
     for (const lodPool of [pool.lod0, pool.lod1, pool.lod2, pool.depleted]) {
       if (!lodPool) continue;
@@ -376,12 +371,9 @@ export function destroyGLBTreeInstancer(): void {
       lodPool.mesh.geometry.dispose();
       lodPool.material.dispose();
     }
-    if (pool.highlightMesh) {
-      pool.highlightMesh.geometry.dispose();
-    }
-    if (pool.depletedHighlightMesh) {
+    if (pool.highlightMesh) pool.highlightMesh.geometry.dispose();
+    if (pool.depletedHighlightMesh)
       pool.depletedHighlightMesh.geometry.dispose();
-    }
   }
   pools.clear();
   entityToModel.clear();
@@ -406,12 +398,12 @@ export async function addInstance(
 
     if (pool.lod0 && pool.lod0.activeCount >= MAX_INSTANCES) {
       console.warn(
-        `[GLBTreeInstancer] LOD0 pool full for ${modelPath}, cannot add ${entityId}`,
+        `[GLBResourceInstancer] LOD0 pool full for ${modelPath}, cannot add ${entityId}`,
       );
       return false;
     }
 
-    const slot: TreeSlot = {
+    const slot: ResourceSlot = {
       entityId,
       position: position.clone(),
       rotation,
@@ -431,7 +423,7 @@ export async function addInstance(
     return true;
   } catch (error) {
     console.warn(
-      `[GLBTreeInstancer] Failed to add instance ${entityId}:`,
+      `[GLBResourceInstancer] Failed to add instance ${entityId}:`,
       error,
     );
     return false;
@@ -470,8 +462,6 @@ export function setDepleted(entityId: string, depleted: boolean): void {
   const slot = pool.instances.get(entityId);
   if (!slot || slot.depleted === depleted) return;
 
-  // If the previous highlight mesh is in the scene (entity is hovered), remove it
-  // so the stale model doesn't linger during the state transition.
   const oldHlMesh = slot.depleted
     ? pool.depletedHighlightMesh
     : pool.highlightMesh;
@@ -482,7 +472,6 @@ export function setDepleted(entityId: string, depleted: boolean): void {
   slot.depleted = depleted;
 
   if (depleted) {
-    // Remove from living LOD pool
     const lodPool =
       slot.currentLOD === 0
         ? pool.lod0
@@ -491,7 +480,6 @@ export function setDepleted(entityId: string, depleted: boolean): void {
           : pool.lod2;
     if (lodPool) removeFromPool(lodPool, entityId);
 
-    // Add to depleted pool (instanced stump)
     if (pool.depleted) {
       const mat = composeInstanceMatrix(
         slot.position,
@@ -502,12 +490,10 @@ export function setDepleted(entityId: string, depleted: boolean): void {
       addToPool(pool.depleted, entityId, mat);
     }
   } else {
-    // Remove from depleted pool
     if (pool.depleted) {
       removeFromPool(pool.depleted, entityId);
     }
 
-    // Re-add to living LOD pool
     const mat = composeInstanceMatrix(
       slot.position,
       slot.rotation,
@@ -528,10 +514,6 @@ export function hasInstance(entityId: string): boolean {
   return entityToModel.has(entityId);
 }
 
-/**
- * Returns true if the instancer has a depleted pool for this entity's model.
- * When true, ResourceEntity can skip loading an individual depleted model.
- */
 export function hasDepleted(entityId: string): boolean {
   const modelPath = entityToModel.get(entityId);
   if (!modelPath) return false;
@@ -539,10 +521,6 @@ export function hasDepleted(entityId: string): boolean {
   return !!pool?.depleted;
 }
 
-/**
- * Returns a positioned highlight mesh for outlining an instanced entity.
- * The mesh is temporarily added to the scene by EntityHighlightService.
- */
 export function getHighlightMesh(entityId: string): THREE.Object3D | null {
   const modelPath = entityToModel.get(entityId);
   if (!modelPath) return null;
@@ -572,7 +550,7 @@ export function getHighlightMesh(entityId: string): THREE.Object3D | null {
 
 let lastUpdateFrame = -1;
 
-export function updateGLBTreeInstancer(): void {
+export function updateGLBResourceInstancer(): void {
   if (!world) return;
   if (world.frame === lastUpdateFrame) return;
   lastUpdateFrame = world.frame;
@@ -583,7 +561,7 @@ export function updateGLBTreeInstancer(): void {
   const camPos = camera.position;
   const lod1DistSq = resourceLOD.lod1DistanceSq;
   const lod2DistSq = resourceLOD.lod2DistanceSq;
-  const hysteresisSq = 0.81; // 0.9^2
+  const hysteresisSq = 0.81;
 
   for (const pool of pools.values()) {
     for (const slot of pool.instances.values()) {
@@ -612,7 +590,6 @@ export function updateGLBTreeInstancer(): void {
 
       if (targetLOD === slot.currentLOD) continue;
 
-      // Move instance between LOD pools
       const oldPool =
         slot.currentLOD === 0
           ? pool.lod0
@@ -636,7 +613,6 @@ export function updateGLBTreeInstancer(): void {
     }
   }
 
-  // Flush dirty pools + update dissolve uniforms
   const camY = camPos.y;
   const players = world.getPlayers();
   const localPlayer = players && players.length > 0 ? players[0] : null;
