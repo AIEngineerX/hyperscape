@@ -215,18 +215,34 @@ else
     echo "[deploy] No DRI devices available (container without DRM access)"
 fi
 
-# If Xorg didn't work, configure for Chrome headless with EGL
+# If Xorg didn't work, try Xvfb with NVIDIA Vulkan
+# Xvfb provides X11 protocol (virtual framebuffer), but Chrome can still use
+# NVIDIA GPU for rendering via ANGLE/Vulkan - frames are captured via CDP
 if [ "$RENDERING_MODE" = "unknown" ]; then
-    echo "[deploy] Configuring Chrome headless mode with EGL..."
-    RENDERING_MODE="headless-egl"
+    echo "[deploy] Trying Xvfb with NVIDIA Vulkan (virtual display + GPU rendering)..."
 
-    # Chrome's headless mode with --use-gl=egl can use NVIDIA EGL without X
-    # We set DISPLAY empty and use special Chrome flags
-    export DISPLAY=""
-    export STREAM_CAPTURE_HEADLESS="new"  # Use Chrome's new headless mode
-    export STREAM_CAPTURE_USE_EGL="true"
+    # Start Xvfb with a virtual display
+    Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset 2>&1 &
+    XVFB_PID=$!
+    sleep 3
 
-    echo "[deploy] ✓ Configured for Chrome headless EGL mode"
+    if kill -0 $XVFB_PID 2>/dev/null && xdpyinfo -display :99 >/dev/null 2>&1; then
+        export DISPLAY=:99
+        export DUEL_CAPTURE_USE_XVFB="true"
+        RENDERING_MODE="xvfb-vulkan"
+        echo "[deploy] ✓ Xvfb started on :99 (Chrome will use NVIDIA Vulkan for WebGPU)"
+    else
+        echo "[deploy] Xvfb failed to start"
+        pkill -9 Xvfb 2>/dev/null || true
+
+        # Last resort: pure headless mode (likely no WebGPU support)
+        echo "[deploy] Configuring Chrome headless mode (WebGPU may not work)..."
+        RENDERING_MODE="headless"
+        export DISPLAY=""
+        export STREAM_CAPTURE_HEADLESS="new"  # Use Chrome's new headless mode
+        export STREAM_CAPTURE_USE_EGL="true"
+        echo "[deploy] ⚠ Using Chrome headless mode - WebGPU may not work"
+    fi
 fi
 
 # Export rendering mode for the streaming bridge
