@@ -125,6 +125,10 @@ const STREAM_CAPTURE_HEADLESS =
   STREAM_CAPTURE_HEADLESS_RAW === "new";
 const STREAM_CAPTURE_HEADLESS_NEW = STREAM_CAPTURE_HEADLESS_RAW === "new";
 const STREAM_CAPTURE_CHANNEL = process.env.STREAM_CAPTURE_CHANNEL?.trim() || "";
+const STREAM_CAPTURE_EXECUTABLE =
+  process.env.STREAM_CAPTURE_EXECUTABLE?.trim() || "";
+const STREAM_CAPTURE_USE_EGL =
+  process.env.STREAM_CAPTURE_USE_EGL?.toLowerCase() === "true";
 const ANGLE_BACKEND =
   process.env.STREAM_CAPTURE_ANGLE?.trim() ||
   (process.platform === "darwin" ? "metal" : "vulkan");
@@ -384,6 +388,12 @@ async function launchCaptureBrowser() {
       featureFlags,
       "--ignore-gpu-blocklist",
       "--enable-gpu-rasterization",
+      // Force hardware GPU rendering - disable software fallbacks
+      "--disable-software-rasterizer",
+      "--disable-gpu-driver-bug-workarounds",
+      "--enable-accelerated-2d-canvas",
+      "--enable-gpu-compositing",
+      "--enable-native-gpu-memory-buffers",
       // Sandbox & stability
       "--no-sandbox",
       "--disable-dev-shm-usage",
@@ -394,6 +404,8 @@ async function launchCaptureBrowser() {
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
       "--disable-hang-monitor",
+      // Force continuous rendering - don't skip frames
+      "--disable-frame-rate-limit",
       // Audio output - use PulseAudio virtual sink for capture
       "--alsa-output-device=pulse",
       "--audio-output-channels=2",
@@ -405,6 +417,16 @@ async function launchCaptureBrowser() {
       PULSE_SINK: "chrome_audio",
     },
   };
+
+  if (STREAM_CAPTURE_EXECUTABLE) {
+    console.log(
+      `[Main] Launching with explicit executable: ${STREAM_CAPTURE_EXECUTABLE}`,
+    );
+    return await chromium.launch({
+      ...launchConfig,
+      executablePath: STREAM_CAPTURE_EXECUTABLE,
+    });
+  }
 
   if (STREAM_CAPTURE_CHANNEL) {
     console.log(
@@ -458,8 +480,13 @@ async function setupBrowser() {
   const headlessMode = STREAM_CAPTURE_HEADLESS_NEW
     ? "new"
     : STREAM_CAPTURE_HEADLESS;
+  const browserInfo = STREAM_CAPTURE_EXECUTABLE
+    ? `exec=${STREAM_CAPTURE_EXECUTABLE}`
+    : STREAM_CAPTURE_CHANNEL
+      ? `channel=${STREAM_CAPTURE_CHANNEL}`
+      : "bundled";
   console.log(
-    `[Main] Launching browser (headless=${headlessMode}, gl=${glMode}${STREAM_CAPTURE_CHANNEL ? `, channel=${STREAM_CAPTURE_CHANNEL}` : ""}, mode=${CAPTURE_MODE})...`,
+    `[Main] Launching browser (headless=${headlessMode}, gl=${glMode}, ${browserInfo}, mode=${CAPTURE_MODE})...`,
   );
   browser = await launchCaptureBrowser();
 
