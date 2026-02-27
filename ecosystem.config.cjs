@@ -92,12 +92,13 @@ module.exports = {
                 // Use Chrome Dev channel (google-chrome-unstable) for WebGPU support
                 // Playwright channel name mapping: chrome-dev -> google-chrome-unstable
                 STREAM_CAPTURE_CHANNEL: "chrome-dev",
-                // Use vulkan ANGLE backend for GPU rendering on Linux
-                STREAM_CAPTURE_ANGLE: "vulkan",
+                // Use swiftshader ANGLE backend for software rendering
+                // Note: vulkan doesn't work on Vast.ai due to ICD issues with libGLX_nvidia.so.0
+                STREAM_CAPTURE_ANGLE: "swiftshader",
                 STREAM_CAPTURE_WIDTH: "1280",
                 STREAM_CAPTURE_HEIGHT: "720",
-                // Enable WebGPU for proper 3D model rendering
-                STREAM_CAPTURE_DISABLE_WEBGPU: "false",
+                // Disable WebGPU - requires working Vulkan which doesn't work on Vast.ai
+                STREAM_CAPTURE_DISABLE_WEBGPU: "true",
                 FFMPEG_PATH: "/usr/bin/ffmpeg",
                 DUEL_DISABLE_BRIDGE_CAPTURE: "false",
                 // Audio streaming configuration
@@ -134,7 +135,8 @@ module.exports = {
                 STREAMING_CANONICAL_PLATFORM: "twitch",
                 // Override public data delay to 0 (no delay)
                 STREAMING_PUBLIC_DELAY_MS: "0",
-                DUEL_FORCE_WEBGL_FALLBACK: "false",
+                // Force WebGL fallback since WebGPU/Vulkan doesn't work on Vast.ai
+                DUEL_FORCE_WEBGL_FALLBACK: "true",
                 GAME_URL: "http://localhost:3333/?page=stream",
                 GAME_FALLBACK_URLS:
                     "http://localhost:3333/?page=stream,http://localhost:3333/?embedded=true&mode=spectator,http://localhost:3333/",
