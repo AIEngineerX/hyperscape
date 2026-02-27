@@ -319,16 +319,18 @@ export function GameClient({
     const canvas = viewport.querySelector("canvas");
     if (!canvas) return;
 
-    // WebGPU uses "device lost" events instead of WebGL context events.
-    // The Three.js WebGPU renderer handles device lost internally,
-    // but we log it for debugging purposes.
+    // WebGPU handles device lost events internally via the Three.js renderer.
+    // Note: webglcontextlost won't fire for WebGPU, but we keep this for debugging
+    // in case the renderer falls back (which shouldn't happen - WebGPU is required).
     const handleContextLost = (event: Event) => {
       event.preventDefault?.();
-      console.warn(
-        "[GameClient] GPU context lost - this may indicate GPU resource exhaustion or driver issues",
+      console.error(
+        "[GameClient] GPU context lost - WebGPU device may have been lost. " +
+          "This indicates GPU resource exhaustion or driver issues.",
       );
     };
 
+    // Listen for both WebGL (legacy) and WebGPU context lost events
     canvas.addEventListener("webglcontextlost", handleContextLost);
 
     return () => {

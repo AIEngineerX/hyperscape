@@ -81,21 +81,21 @@ function withViewerAccessToken(rawUrl: string): string {
   }
 }
 
+/**
+ * Process game URL for streaming.
+ * WebGPU is REQUIRED - there is no WebGL fallback.
+ */
 function withRendererCaptureHints(rawUrl: string): string {
-  const disableWebGPU = /^(1|true|yes|on)$/i.test(
-    process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "",
-  );
-  if (!disableWebGPU) return rawUrl;
-  try {
-    const url = new URL(rawUrl);
-    // Ensure frontend renderer policy matches capture browser flags.
-    url.searchParams.set("forceWebGL", "1");
-    url.searchParams.set("disableWebGPU", "1");
-    return url.toString();
-  } catch {
-    const separator = rawUrl.includes("?") ? "&" : "?";
-    return `${rawUrl}${separator}forceWebGL=1&disableWebGPU=1`;
+  // WebGPU is required - we don't add any disable flags
+  // The STREAM_CAPTURE_DISABLE_WEBGPU env var is ignored
+  if (
+    /^(1|true|yes|on)$/i.test(process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "")
+  ) {
+    console.warn(
+      "[Main] WARNING: STREAM_CAPTURE_DISABLE_WEBGPU is set but ignored - WebGPU is REQUIRED",
+    );
   }
+  return rawUrl;
 }
 
 const GAME_URL_CANDIDATES = Array.from(
@@ -117,14 +117,21 @@ const CAPTURE_MODE = (process.env.STREAM_CAPTURE_MODE?.trim() || "cdp") as
   | "cdp"
   | "mediarecorder"
   | "webcodecs";
-const STREAM_CAPTURE_HEADLESS = process.env.STREAM_CAPTURE_HEADLESS === "true";
+// Headless modes: false (with display), true (legacy headless), "new" (Chrome's new headless with GPU)
+const STREAM_CAPTURE_HEADLESS_RAW =
+  process.env.STREAM_CAPTURE_HEADLESS?.trim() || "false";
+const STREAM_CAPTURE_HEADLESS =
+  STREAM_CAPTURE_HEADLESS_RAW === "true" ||
+  STREAM_CAPTURE_HEADLESS_RAW === "new";
+const STREAM_CAPTURE_HEADLESS_NEW = STREAM_CAPTURE_HEADLESS_RAW === "new";
 const STREAM_CAPTURE_CHANNEL = process.env.STREAM_CAPTURE_CHANNEL?.trim() || "";
+const STREAM_CAPTURE_EXECUTABLE =
+  process.env.STREAM_CAPTURE_EXECUTABLE?.trim() || "";
+const STREAM_CAPTURE_USE_EGL =
+  process.env.STREAM_CAPTURE_USE_EGL?.toLowerCase() === "true";
 const ANGLE_BACKEND =
   process.env.STREAM_CAPTURE_ANGLE?.trim() ||
   (process.platform === "darwin" ? "metal" : "vulkan");
-const STREAM_CAPTURE_DISABLE_WEBGPU = /^(1|true|yes|on)$/i.test(
-  process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "",
-);
 const CDP_QUALITY = Math.min(
   100,
   Math.max(1, parseInt(process.env.STREAM_CDP_QUALITY || "80", 10)),
@@ -352,22 +359,41 @@ async function waitForStreamReadiness(
 // ── Browser Launch ─────────────────────────────────────────────────────────
 
 async function launchCaptureBrowser() {
-  const featureFlags = STREAM_CAPTURE_DISABLE_WEBGPU
-    ? "--enable-features=UseSkiaRenderer"
-    : "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
+  // WebGPU is REQUIRED - configure Chrome for optimal WebGPU support
+  const featureFlags = "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
+
+  // Use ANGLE/Vulkan for WebGPU support
+  const glArgs = ["--use-gl=angle", `--use-angle=${ANGLE_BACKEND}`];
+
+  // Headless mode configuration
+  // NOTE: WebGPU requires a display (Xorg or Xvfb) - pure headless won't work
+  // Playwright's headless option only accepts boolean
+  const playwrightHeadless =
+    STREAM_CAPTURE_HEADLESS && !STREAM_CAPTURE_HEADLESS_NEW;
+
+  if (STREAM_CAPTURE_HEADLESS && !process.env.DISPLAY) {
+    console.warn(
+      "[Main] WARNING: Headless mode requested but WebGPU requires a display (Xorg/Xvfb)",
+    );
+  }
+
   const launchConfig = {
-    headless: STREAM_CAPTURE_HEADLESS,
+    headless: playwrightHeadless,
     args: [
-      // GPU / WebGPU essentials
-      "--use-gl=angle",
-      `--use-angle=${ANGLE_BACKEND}`,
-      "--enable-webgl",
-      ...(STREAM_CAPTURE_DISABLE_WEBGPU
-        ? ["--disable-webgpu"]
-        : ["--enable-unsafe-webgpu"]),
+      // Chrome's new headless mode (if requested) - must be passed as arg, not option
+      ...(STREAM_CAPTURE_HEADLESS_NEW ? ["--headless=new"] : []),
+      // GPU / WebGPU essentials - WebGPU is REQUIRED
+      ...glArgs,
+      "--enable-unsafe-webgpu",
       featureFlags,
       "--ignore-gpu-blocklist",
       "--enable-gpu-rasterization",
+      // Force hardware GPU rendering - disable software fallbacks
+      "--disable-software-rasterizer",
+      "--disable-gpu-driver-bug-workarounds",
+      "--enable-accelerated-2d-canvas",
+      "--enable-gpu-compositing",
+      "--enable-native-gpu-memory-buffers",
       // Sandbox & stability
       "--no-sandbox",
       "--disable-dev-shm-usage",
@@ -378,6 +404,8 @@ async function launchCaptureBrowser() {
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
       "--disable-hang-monitor",
+      // Force continuous rendering - don't skip frames
+      "--disable-frame-rate-limit",
       // Audio output - use PulseAudio virtual sink for capture
       "--alsa-output-device=pulse",
       "--audio-output-channels=2",
@@ -389,6 +417,16 @@ async function launchCaptureBrowser() {
       PULSE_SINK: "chrome_audio",
     },
   };
+
+  if (STREAM_CAPTURE_EXECUTABLE) {
+    console.log(
+      `[Main] Launching with explicit executable: ${STREAM_CAPTURE_EXECUTABLE}`,
+    );
+    return await chromium.launch({
+      ...launchConfig,
+      executablePath: STREAM_CAPTURE_EXECUTABLE,
+    });
+  }
 
   if (STREAM_CAPTURE_CHANNEL) {
     console.log(
@@ -438,8 +476,17 @@ async function launchCaptureBrowser() {
 async function setupBrowser() {
   if (browser) await cleanup();
 
+  const glMode = STREAM_CAPTURE_USE_EGL ? "egl" : `angle/${ANGLE_BACKEND}`;
+  const headlessMode = STREAM_CAPTURE_HEADLESS_NEW
+    ? "new"
+    : STREAM_CAPTURE_HEADLESS;
+  const browserInfo = STREAM_CAPTURE_EXECUTABLE
+    ? `exec=${STREAM_CAPTURE_EXECUTABLE}`
+    : STREAM_CAPTURE_CHANNEL
+      ? `channel=${STREAM_CAPTURE_CHANNEL}`
+      : "bundled";
   console.log(
-    `[Main] Launching browser (headless=${STREAM_CAPTURE_HEADLESS}, angle=${ANGLE_BACKEND}${STREAM_CAPTURE_CHANNEL ? `, channel=${STREAM_CAPTURE_CHANNEL}` : ""}, mode=${CAPTURE_MODE})...`,
+    `[Main] Launching browser (headless=${headlessMode}, gl=${glMode}, ${browserInfo}, mode=${CAPTURE_MODE})...`,
   );
   browser = await launchCaptureBrowser();
 
@@ -1127,7 +1174,7 @@ async function main() {
     // Check for periodic restart to clear memory leaks
     if (Date.now() - launchTime > BROWSER_RESTART_INTERVAL_MS) {
       console.log(
-        "[Main] 🔄 Scheduled browser rotation to prevent WebGL memory leaks.",
+        "[Main] 🔄 Scheduled browser rotation to prevent WebGPU memory leaks.",
       );
       try {
         if (activeCaptureMode === "cdp") {

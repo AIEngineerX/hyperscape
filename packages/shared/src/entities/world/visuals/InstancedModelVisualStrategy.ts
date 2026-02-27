@@ -15,6 +15,8 @@ import {
   addInstance as addResourceInstance,
   removeInstance as removeResourceInstance,
   setDepleted as setResourceDepleted,
+  hasDepleted as hasResourceDepleted,
+  getHighlightMesh as getResourceHighlightMesh,
   updateGLBResourceInstancer,
 } from "../../../systems/shared/world/GLBResourceInstancer";
 import type {
@@ -74,6 +76,8 @@ export class InstancedModelVisualStrategy implements ResourceVisualStrategy {
       worldPos,
       rotation,
       baseScale,
+      config.depletedModelPath ?? null,
+      config.depletedModelScale ?? 0.3,
     );
 
     if (success) {
@@ -89,10 +93,9 @@ export class InstancedModelVisualStrategy implements ResourceVisualStrategy {
     await this.fallback.createVisual(ctx);
   }
 
-  async onDepleted(ctx: ResourceVisualContext): Promise<void> {
+  async onDepleted(ctx: ResourceVisualContext): Promise<boolean> {
     if (this.fallback) {
-      await this.fallback.onDepleted();
-      return;
+      return this.fallback.onDepleted();
     }
 
     if (this.instanced) {
@@ -103,6 +106,12 @@ export class InstancedModelVisualStrategy implements ResourceVisualStrategy {
       proxy.userData.depleted = true;
       proxy.userData.interactable = false;
     }
+    return hasResourceDepleted(ctx.id);
+  }
+
+  getHighlightMesh(ctx: ResourceVisualContext): THREE.Object3D | null {
+    if (this.fallback) return null;
+    return getResourceHighlightMesh(ctx.id);
   }
 
   async onRespawn(ctx: ResourceVisualContext): Promise<void> {
