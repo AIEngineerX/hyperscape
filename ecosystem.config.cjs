@@ -141,10 +141,12 @@ module.exports = {
                 GAME_URL: "http://localhost:3333/?page=stream",
                 GAME_FALLBACK_URLS:
                     "http://localhost:3333/?page=stream,http://localhost:3333/?embedded=true&mode=spectator,http://localhost:3333/",
-                // Use Xorg (started by deploy-vast.sh) instead of Xvfb for NVIDIA GPU rendering
-                // Xvfb is software-only and cannot provide GPU access for WebGPU
-                DUEL_CAPTURE_USE_XVFB: "false",
-                // Xorg display set by deploy-vast.sh (defaults to :99)
+                // Display server mode - set by deploy-vast.sh based on GPU availability
+                // If Xorg works with NVIDIA, DUEL_CAPTURE_USE_XVFB=false for hardware rendering
+                // If Xorg fails, falls back to Xvfb with DUEL_CAPTURE_USE_XVFB=true
+                DUEL_CAPTURE_USE_XVFB:
+                    process.env.DUEL_CAPTURE_USE_XVFB || "true",
+                // Display set by deploy-vast.sh (defaults to :99)
                 DISPLAY: process.env.DISPLAY || ":99",
                 // Stabilize long-running streams by avoiding per-agent DuelCombatAI state polling churn.
                 STREAMING_DUEL_COMBAT_AI_ENABLED: "false",
