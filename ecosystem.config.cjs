@@ -98,7 +98,8 @@ module.exports = {
                 STREAM_CAPTURE_ANGLE: "vulkan",
                 STREAM_CAPTURE_WIDTH: "1280",
                 STREAM_CAPTURE_HEIGHT: "720",
-                // Enable WebGPU (requires working Vulkan - using NVIDIA via Xorg headless)
+                // WebGPU is REQUIRED - there is no WebGL fallback
+                // This env var is kept for diagnostics but always false
                 STREAM_CAPTURE_DISABLE_WEBGPU: "false",
                 FFMPEG_PATH: "/usr/bin/ffmpeg",
                 DUEL_DISABLE_BRIDGE_CAPTURE: "false",
@@ -136,20 +137,19 @@ module.exports = {
                 STREAMING_CANONICAL_PLATFORM: "twitch",
                 // Override public data delay to 0 (no delay)
                 STREAMING_PUBLIC_DELAY_MS: "0",
-                // WebGL fallback not possible - game requires WebGPU (TSL shaders)
+                // WebGPU is REQUIRED - WebGL will NOT work (TSL shaders require WebGPU)
+                // This variable is deprecated but kept for backwards compatibility
                 DUEL_FORCE_WEBGL_FALLBACK: "false",
                 GAME_URL: "http://localhost:3333/?page=stream",
                 GAME_FALLBACK_URLS:
                     "http://localhost:3333/?page=stream,http://localhost:3333/?embedded=true&mode=spectator,http://localhost:3333/",
-                // Hardware GPU rendering required - no Xvfb software fallback
-                // deploy-vast.sh sets up either Xorg or headless EGL mode
-                DUEL_CAPTURE_USE_XVFB: "false",
-                DISPLAY: process.env.DISPLAY || "",
-                // Headless EGL mode (for containers without DRM/DRI access)
-                STREAM_CAPTURE_HEADLESS:
-                    process.env.STREAM_CAPTURE_HEADLESS || "false",
-                STREAM_CAPTURE_USE_EGL:
-                    process.env.STREAM_CAPTURE_USE_EGL || "false",
+                // WebGPU REQUIRES hardware GPU rendering with a display (Xorg or Xvfb)
+                // Headless mode does NOT support WebGPU - deploy-vast.sh enforces this
+                DUEL_CAPTURE_USE_XVFB: process.env.DUEL_CAPTURE_USE_XVFB || "false",
+                DISPLAY: process.env.DISPLAY || ":99",
+                // Headless mode is NOT supported for WebGPU - these should always be false
+                STREAM_CAPTURE_HEADLESS: "false",
+                STREAM_CAPTURE_USE_EGL: "false",
                 GPU_RENDERING_MODE: process.env.GPU_RENDERING_MODE || "xorg",
                 // Stabilize long-running streams by avoiding per-agent DuelCombatAI state polling churn.
                 STREAMING_DUEL_COMBAT_AI_ENABLED: "false",

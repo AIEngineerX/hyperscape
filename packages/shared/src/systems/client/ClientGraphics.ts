@@ -79,7 +79,7 @@ import {
   configureShadowMaps,
   getMaxAnisotropy,
   isWebGPURenderer,
-  type UniversalRenderer,
+  type WebGPURenderer,
   logWebGPUInfo,
   getWebGPUCapabilities,
 } from "../../utils/rendering/RendererFactory";
@@ -95,9 +95,9 @@ import {
   type GPUComputeManager,
 } from "../../utils/compute";
 
-let renderer: UniversalRenderer | undefined;
+let renderer: WebGPURenderer | undefined;
 
-async function getRenderer(): Promise<UniversalRenderer> {
+async function getRenderer(): Promise<WebGPURenderer> {
   if (!renderer) {
     renderer = await createRenderer({
       powerPreference: "high-performance",
@@ -111,7 +111,7 @@ async function getRenderer(): Promise<UniversalRenderer> {
  * Get the shared WebGPU renderer instance
  * @returns The renderer or undefined if not initialized
  */
-export function getSharedRenderer(): UniversalRenderer | undefined {
+export function getSharedRenderer(): WebGPURenderer | undefined {
   return renderer;
 }
 
@@ -123,7 +123,7 @@ export function getSharedRenderer(): UniversalRenderer | undefined {
  */
 export class ClientGraphics extends System {
   // Properties
-  renderer!: UniversalRenderer;
+  renderer!: WebGPURenderer;
   viewport!: HTMLElement;
   maxAnisotropy!: number;
   usePostprocessing!: boolean;

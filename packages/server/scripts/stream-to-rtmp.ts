@@ -81,21 +81,21 @@ function withViewerAccessToken(rawUrl: string): string {
   }
 }
 
+/**
+ * Process game URL for streaming.
+ * WebGPU is REQUIRED - there is no WebGL fallback.
+ */
 function withRendererCaptureHints(rawUrl: string): string {
-  const disableWebGPU = /^(1|true|yes|on)$/i.test(
-    process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "",
-  );
-  if (!disableWebGPU) return rawUrl;
-  try {
-    const url = new URL(rawUrl);
-    // Ensure frontend renderer policy matches capture browser flags.
-    url.searchParams.set("forceWebGL", "1");
-    url.searchParams.set("disableWebGPU", "1");
-    return url.toString();
-  } catch {
-    const separator = rawUrl.includes("?") ? "&" : "?";
-    return `${rawUrl}${separator}forceWebGL=1&disableWebGPU=1`;
+  // WebGPU is required - we don't add any disable flags
+  // The STREAM_CAPTURE_DISABLE_WEBGPU env var is ignored
+  if (
+    /^(1|true|yes|on)$/i.test(process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "")
+  ) {
+    console.warn(
+      "[Main] WARNING: STREAM_CAPTURE_DISABLE_WEBGPU is set but ignored - WebGPU is REQUIRED",
+    );
   }
+  return rawUrl;
 }
 
 const GAME_URL_CANDIDATES = Array.from(
@@ -125,14 +125,9 @@ const STREAM_CAPTURE_HEADLESS =
   STREAM_CAPTURE_HEADLESS_RAW === "new";
 const STREAM_CAPTURE_HEADLESS_NEW = STREAM_CAPTURE_HEADLESS_RAW === "new";
 const STREAM_CAPTURE_CHANNEL = process.env.STREAM_CAPTURE_CHANNEL?.trim() || "";
-// Use EGL directly (for headless GPU rendering without X server)
-const STREAM_CAPTURE_USE_EGL = process.env.STREAM_CAPTURE_USE_EGL === "true";
 const ANGLE_BACKEND =
   process.env.STREAM_CAPTURE_ANGLE?.trim() ||
   (process.platform === "darwin" ? "metal" : "vulkan");
-const STREAM_CAPTURE_DISABLE_WEBGPU = /^(1|true|yes|on)$/i.test(
-  process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "",
-);
 const CDP_QUALITY = Math.min(
   100,
   Math.max(1, parseInt(process.env.STREAM_CDP_QUALITY || "80", 10)),
@@ -360,44 +355,35 @@ async function waitForStreamReadiness(
 // ── Browser Launch ─────────────────────────────────────────────────────────
 
 async function launchCaptureBrowser() {
-  const featureFlags = STREAM_CAPTURE_DISABLE_WEBGPU
-    ? "--enable-features=UseSkiaRenderer"
-    : "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
+  // WebGPU is REQUIRED - configure Chrome for optimal WebGPU support
+  const featureFlags = "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
 
-  // Determine GL backend: Use ANGLE/Vulkan for WebGPU support
-  // When running headless with no display, Chrome's --headless=new mode handles
-  // compositor setup automatically - we don't force --ozone-platform=headless
-  // because that uses a software compositor without WebGPU support
-  const glArgs = ["--use-gl=angle", "--use-angle=vulkan"];
+  // Use ANGLE/Vulkan for WebGPU support
+  const glArgs = ["--use-gl=angle", `--use-angle=${ANGLE_BACKEND}`];
 
   // Headless mode configuration
+  // NOTE: WebGPU requires a display (Xorg or Xvfb) - pure headless won't work
   // Playwright's headless option only accepts boolean
-  // For Chrome's new headless mode (--headless=new), we pass false to Playwright
-  // and add the flag manually to args
   const playwrightHeadless =
     STREAM_CAPTURE_HEADLESS && !STREAM_CAPTURE_HEADLESS_NEW;
+
+  if (STREAM_CAPTURE_HEADLESS && !process.env.DISPLAY) {
+    console.warn(
+      "[Main] WARNING: Headless mode requested but WebGPU requires a display (Xorg/Xvfb)",
+    );
+  }
 
   const launchConfig = {
     headless: playwrightHeadless,
     args: [
       // Chrome's new headless mode (if requested) - must be passed as arg, not option
       ...(STREAM_CAPTURE_HEADLESS_NEW ? ["--headless=new"] : []),
-      // GPU / WebGPU essentials
+      // GPU / WebGPU essentials - WebGPU is REQUIRED
       ...glArgs,
-      "--enable-webgl",
-      ...(STREAM_CAPTURE_DISABLE_WEBGPU
-        ? ["--disable-webgpu"]
-        : ["--enable-unsafe-webgpu"]),
+      "--enable-unsafe-webgpu",
       featureFlags,
       "--ignore-gpu-blocklist",
       "--enable-gpu-rasterization",
-      // Enable GPU features in headless mode
-      ...(STREAM_CAPTURE_HEADLESS_NEW
-        ? [
-            "--enable-features=UseOzonePlatform,VaapiVideoDecoder,VaapiVideoEncoder",
-            "--enable-gpu-memory-buffer-video-frames",
-          ]
-        : []),
       // Sandbox & stability
       "--no-sandbox",
       "--disable-dev-shm-usage",
@@ -1161,7 +1147,7 @@ async function main() {
     // Check for periodic restart to clear memory leaks
     if (Date.now() - launchTime > BROWSER_RESTART_INTERVAL_MS) {
       console.log(
-        "[Main] 🔄 Scheduled browser rotation to prevent WebGL memory leaks.",
+        "[Main] 🔄 Scheduled browser rotation to prevent WebGPU memory leaks.",
       );
       try {
         if (activeCaptureMode === "cdp") {

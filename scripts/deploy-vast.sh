@@ -79,11 +79,14 @@ echo "[deploy] Checking Vulkan support (NVIDIA-only)..."
 vulkaninfo --summary 2>/dev/null || echo "[deploy] WARNING: Vulkan may not be available"
 
 # ── Setup GPU Rendering for WebGPU ──
-# WebGPU requires hardware GPU rendering. We try multiple approaches:
+# WebGPU is REQUIRED - there is NO WebGL fallback.
+# We try multiple approaches in order:
 # 1. Xorg with NVIDIA (best if DRI/DRM devices are available)
-# 2. Chrome headless with EGL (works without X server in containers)
+# 2. Xvfb with NVIDIA Vulkan (virtual framebuffer, Chrome uses GPU via ANGLE/Vulkan)
+# If neither works, deployment MUST FAIL - headless mode does NOT support WebGPU.
 echo "[deploy] ═══════════════════════════════════════════════════════════"
 echo "[deploy] Setting up GPU rendering for WebGPU streaming"
+echo "[deploy] CRITICAL: WebGPU is REQUIRED - NO WebGL fallback"
 echo "[deploy] ═══════════════════════════════════════════════════════════"
 
 # Verify NVIDIA GPU is available
@@ -234,23 +237,39 @@ if [ "$RENDERING_MODE" = "unknown" ]; then
     else
         echo "[deploy] Xvfb failed to start"
         pkill -9 Xvfb 2>/dev/null || true
-
-        # Last resort: pure headless mode (likely no WebGPU support)
-        echo "[deploy] Configuring Chrome headless mode (WebGPU may not work)..."
-        RENDERING_MODE="headless"
-        export DISPLAY=""
-        export STREAM_CAPTURE_HEADLESS="new"  # Use Chrome's new headless mode
-        export STREAM_CAPTURE_USE_EGL="true"
-        echo "[deploy] ⚠ Using Chrome headless mode - WebGPU may not work"
     fi
+fi
+
+# CRITICAL: If no rendering mode was established, FAIL deployment
+# WebGPU is REQUIRED - headless mode does NOT support WebGPU
+if [ "$RENDERING_MODE" = "unknown" ]; then
+    echo "[deploy] ════════════════════════════════════════════════════════════════"
+    echo "[deploy] FATAL ERROR: Cannot establish WebGPU-capable rendering mode"
+    echo "[deploy] ════════════════════════════════════════════════════════════════"
+    echo "[deploy] WebGPU is REQUIRED for Hyperscape - there is NO WebGL fallback."
+    echo "[deploy] "
+    echo "[deploy] Both Xorg and Xvfb failed to start. This usually means:"
+    echo "[deploy]   - NVIDIA drivers are not properly installed"
+    echo "[deploy]   - GPU is not accessible in this container"
+    echo "[deploy]   - DRI/DRM devices are not available"
+    echo "[deploy] "
+    echo "[deploy] Please ensure:"
+    echo "[deploy]   1. Vast.ai instance has an NVIDIA GPU"
+    echo "[deploy]   2. NVIDIA drivers and CUDA are installed"
+    echo "[deploy]   3. Container has access to GPU devices"
+    echo "[deploy] "
+    echo "[deploy] Deployment CANNOT continue without WebGPU support."
+    echo "[deploy] ════════════════════════════════════════════════════════════════"
+    exit 1
 fi
 
 # Export rendering mode for the streaming bridge
 export GPU_RENDERING_MODE="$RENDERING_MODE"
 echo "[deploy] ═══════════════════════════════════════════════════════════"
 echo "[deploy] GPU Rendering Mode: $RENDERING_MODE"
-echo "[deploy] DISPLAY: ${DISPLAY:-'(none - headless)'}"
+echo "[deploy] DISPLAY: $DISPLAY"
 echo "[deploy] DUEL_CAPTURE_USE_XVFB: $DUEL_CAPTURE_USE_XVFB"
+echo "[deploy] WebGPU: ENABLED (required)"
 echo "[deploy] ═══════════════════════════════════════════════════════════"
 
 # ── Install Chrome Dev channel (has WebGPU enabled by default) ─
@@ -449,26 +468,26 @@ echo "[deploy] YOUTUBE_STREAM_KEY: DISABLED"
 
 # ── Ensure GPU environment is set for PM2 ─────────────────────
 # These must be exported so ecosystem.config.cjs and child processes can access them
-# Note: DISPLAY, STREAM_CAPTURE_HEADLESS, STREAM_CAPTURE_USE_EGL were set by GPU setup above
-# Don't override them here (they may be empty for headless EGL mode)
+# WebGPU requires a DISPLAY - we should never be in headless mode at this point
 export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/nvidia_icd.json"
+export STREAM_CAPTURE_HEADLESS="false"
+export STREAM_CAPTURE_USE_EGL="false"
+
 echo "[deploy] GPU environment:"
-echo "[deploy]   DISPLAY=${DISPLAY:-'(empty for headless)'}"
-echo "[deploy]   STREAM_CAPTURE_HEADLESS=${STREAM_CAPTURE_HEADLESS:-false}"
-echo "[deploy]   STREAM_CAPTURE_USE_EGL=${STREAM_CAPTURE_USE_EGL:-false}"
-echo "[deploy]   GPU_RENDERING_MODE=${GPU_RENDERING_MODE:-unknown}"
+echo "[deploy]   DISPLAY=$DISPLAY"
+echo "[deploy]   GPU_RENDERING_MODE=$GPU_RENDERING_MODE"
 echo "[deploy]   VK_ICD_FILENAMES=$VK_ICD_FILENAMES"
 echo "[deploy]   DUEL_CAPTURE_USE_XVFB=$DUEL_CAPTURE_USE_XVFB"
+echo "[deploy]   STREAM_CAPTURE_HEADLESS=$STREAM_CAPTURE_HEADLESS"
+echo "[deploy]   WebGPU: ENABLED (required)"
 
-# Only verify display if we're not in headless mode
-if [ -n "$DISPLAY" ]; then
-    if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
-        echo "[deploy] Display $DISPLAY is accessible"
-    else
-        echo "[deploy] WARNING: Display $DISPLAY is not accessible"
-    fi
+# Verify display is accessible
+if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+    echo "[deploy] ✓ Display $DISPLAY is accessible"
 else
-    echo "[deploy] Running in headless mode (no DISPLAY)"
+    echo "[deploy] FATAL: Display $DISPLAY is not accessible"
+    echo "[deploy] WebGPU requires a working display (Xorg or Xvfb)"
+    exit 1
 fi
 
 # ── Start duel stack via pm2 ─────────────────────────────────
