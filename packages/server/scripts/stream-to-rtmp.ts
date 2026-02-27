@@ -362,6 +362,8 @@ async function launchCaptureBrowser() {
       "--use-gl=angle",
       `--use-angle=${ANGLE_BACKEND}`,
       "--enable-webgl",
+      // Enable SwiftShader (software Vulkan) for WebGPU when hardware Vulkan is unavailable
+      "--enable-unsafe-swiftshader",
       ...(STREAM_CAPTURE_DISABLE_WEBGPU
         ? ["--disable-webgpu"]
         : ["--enable-unsafe-webgpu"]),

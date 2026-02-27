@@ -92,10 +92,10 @@ module.exports = {
                 // Use Chrome Dev channel (google-chrome-unstable) for WebGPU support
                 // Playwright channel name mapping: chrome-dev -> google-chrome-unstable
                 STREAM_CAPTURE_CHANNEL: "chrome-dev",
-                // Use vulkan ANGLE backend with Lavapipe (software Vulkan)
-                // Force Lavapipe ICD since NVIDIA Vulkan ICD is broken on Vast.ai
-                VK_ICD_FILENAMES: "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json",
-                STREAM_CAPTURE_ANGLE: "vulkan",
+                // Use swiftshader ANGLE backend (CPU-based OpenGL ES)
+                // Chrome's --enable-unsafe-swiftshader provides software Vulkan for WebGPU
+                // VK_ICD_FILENAMES not needed - Chrome uses its bundled SwiftShader
+                STREAM_CAPTURE_ANGLE: "swiftshader",
                 STREAM_CAPTURE_WIDTH: "1280",
                 STREAM_CAPTURE_HEIGHT: "720",
                 // Enable WebGPU (requires working Vulkan - now using Lavapipe)
