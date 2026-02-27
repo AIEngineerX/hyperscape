@@ -37,6 +37,7 @@ interface ResourceSlot {
   position: THREE.Vector3;
   rotation: number;
   scale: number;
+  depletedScale: number;
   yOffset: number;
   currentLOD: 0 | 1 | 2;
   depleted: boolean;
@@ -55,8 +56,12 @@ interface ModelPool {
   lod0: LODPool | null;
   lod1: LODPool | null;
   lod2: LODPool | null;
+  depleted: LODPool | null;
   instances: Map<string, ResourceSlot>;
   yOffset: number;
+  depletedYOffset: number;
+  highlightMesh: THREE.Mesh | null;
+  depletedHighlightMesh: THREE.Mesh | null;
 }
 
 const resourceLOD = getLODDistances("resource");
@@ -158,9 +163,31 @@ async function loadLODModel(path: string): Promise<{
 
 const pendingEnsure = new Map<string, Promise<ModelPool>>();
 
-async function ensureModelPool(modelPath: string): Promise<ModelPool> {
+function createHighlightMesh(
+  geometry: THREE.BufferGeometry,
+  material: THREE.Material,
+): THREE.Mesh {
+  const geo = createSharedGeometry(geometry);
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.frustumCulled = false;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  mesh.layers.set(1);
+  mesh.visible = true;
+  return mesh;
+}
+
+async function ensureModelPool(
+  modelPath: string,
+  depletedModelPath?: string | null,
+): Promise<ModelPool> {
   const existing = pools.get(modelPath);
-  if (existing) return existing;
+  if (existing) {
+    if (depletedModelPath && !existing.depleted) {
+      await loadDepletedPool(existing, depletedModelPath);
+    }
+    return existing;
+  }
 
   const pending = pendingEnsure.get(modelPath);
   if (pending) return pending;
@@ -181,6 +208,11 @@ async function ensureModelPool(modelPath: string): Promise<ModelPool> {
     });
     world!.setupMaterial(lod0Material);
     const lod0Pool = createLODPool(lod0Data.geometry, lod0Material);
+
+    const highlightMesh = createHighlightMesh(
+      lod0Data.geometry,
+      lod0Data.material,
+    );
 
     let lod1Pool: LODPool | null = null;
     const lod1Data = await loadLODModel(inferLOD1Path(modelPath));
@@ -215,10 +247,19 @@ async function ensureModelPool(modelPath: string): Promise<ModelPool> {
       lod0: lod0Pool,
       lod1: lod1Pool,
       lod2: lod2Pool,
+      depleted: null,
       instances: new Map(),
       yOffset,
+      depletedYOffset: 0,
+      highlightMesh,
+      depletedHighlightMesh: null,
     };
     pools.set(modelPath, pool);
+
+    if (depletedModelPath) {
+      await loadDepletedPool(pool, depletedModelPath);
+    }
+
     return pool;
   })();
 
@@ -228,6 +269,41 @@ async function ensureModelPool(modelPath: string): Promise<ModelPool> {
   } finally {
     pendingEnsure.delete(modelPath);
   }
+}
+
+async function loadDepletedPool(
+  pool: ModelPool,
+  depletedModelPath: string,
+): Promise<void> {
+  if (pool.depleted) return;
+  const depletedData = await loadLODModel(depletedModelPath);
+  if (!depletedData) return;
+
+  let depletedYOffset = 0;
+  try {
+    const { scene: depScene } = await modelCache.loadModel(
+      depletedModelPath,
+      world!,
+    );
+    depletedYOffset = computeYOffset(depScene, 1);
+  } catch {
+    /* use 0 */
+  }
+
+  const depletedMaterial = createDissolveMaterial(depletedData.material, {
+    fadeStart: GPU_VEG_CONFIG.FADE_START,
+    fadeEnd: GPU_VEG_CONFIG.FADE_END,
+    enableNearFade: false,
+    enableWaterCulling: false,
+    enableOcclusionDissolve: false,
+  });
+  world!.setupMaterial(depletedMaterial);
+  pool.depleted = createLODPool(depletedData.geometry, depletedMaterial);
+  pool.depletedYOffset = depletedYOffset;
+  pool.depletedHighlightMesh = createHighlightMesh(
+    depletedData.geometry,
+    depletedData.material,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -289,12 +365,15 @@ export function initGLBResourceInstancer(s: THREE.Scene, w: World): void {
 
 export function destroyGLBResourceInstancer(): void {
   for (const pool of pools.values()) {
-    for (const lodPool of [pool.lod0, pool.lod1, pool.lod2]) {
+    for (const lodPool of [pool.lod0, pool.lod1, pool.lod2, pool.depleted]) {
       if (!lodPool) continue;
       scene?.remove(lodPool.mesh);
       lodPool.mesh.geometry.dispose();
       lodPool.material.dispose();
     }
+    if (pool.highlightMesh) pool.highlightMesh.geometry.dispose();
+    if (pool.depletedHighlightMesh)
+      pool.depletedHighlightMesh.geometry.dispose();
   }
   pools.clear();
   entityToModel.clear();
@@ -309,11 +388,13 @@ export async function addInstance(
   position: THREE.Vector3,
   rotation: number,
   scale: number,
+  depletedModelPath?: string | null,
+  depletedScale?: number,
 ): Promise<boolean> {
   if (!scene || !world) return false;
 
   try {
-    const pool = await ensureModelPool(modelPath);
+    const pool = await ensureModelPool(modelPath, depletedModelPath);
 
     if (pool.lod0 && pool.lod0.activeCount >= MAX_INSTANCES) {
       console.warn(
@@ -327,6 +408,7 @@ export async function addInstance(
       position: position.clone(),
       rotation,
       scale,
+      depletedScale: depletedScale ?? scale,
       yOffset: pool.yOffset,
       currentLOD: 0,
       depleted: false,
@@ -380,6 +462,13 @@ export function setDepleted(entityId: string, depleted: boolean): void {
   const slot = pool.instances.get(entityId);
   if (!slot || slot.depleted === depleted) return;
 
+  const oldHlMesh = slot.depleted
+    ? pool.depletedHighlightMesh
+    : pool.highlightMesh;
+  if (oldHlMesh?.parent) {
+    oldHlMesh.parent.remove(oldHlMesh);
+  }
+
   slot.depleted = depleted;
 
   if (depleted) {
@@ -390,7 +479,21 @@ export function setDepleted(entityId: string, depleted: boolean): void {
           ? pool.lod1
           : pool.lod2;
     if (lodPool) removeFromPool(lodPool, entityId);
+
+    if (pool.depleted) {
+      const mat = composeInstanceMatrix(
+        slot.position,
+        slot.rotation,
+        slot.depletedScale,
+        pool.depletedYOffset,
+      );
+      addToPool(pool.depleted, entityId, mat);
+    }
   } else {
+    if (pool.depleted) {
+      removeFromPool(pool.depleted, entityId);
+    }
+
     const mat = composeInstanceMatrix(
       slot.position,
       slot.rotation,
@@ -409,6 +512,40 @@ export function setDepleted(entityId: string, depleted: boolean): void {
 
 export function hasInstance(entityId: string): boolean {
   return entityToModel.has(entityId);
+}
+
+export function hasDepleted(entityId: string): boolean {
+  const modelPath = entityToModel.get(entityId);
+  if (!modelPath) return false;
+  const pool = pools.get(modelPath);
+  return !!pool?.depleted;
+}
+
+export function getHighlightMesh(entityId: string): THREE.Object3D | null {
+  const modelPath = entityToModel.get(entityId);
+  if (!modelPath) return null;
+
+  const pool = pools.get(modelPath);
+  if (!pool) return null;
+
+  const slot = pool.instances.get(entityId);
+  if (!slot) return null;
+
+  const mesh = slot.depleted ? pool.depletedHighlightMesh : pool.highlightMesh;
+  if (!mesh) return null;
+
+  const s = slot.depleted ? slot.depletedScale : slot.scale;
+  const yOff = slot.depleted ? pool.depletedYOffset : pool.yOffset;
+  mesh.position.set(
+    slot.position.x,
+    slot.position.y + yOff * s,
+    slot.position.z,
+  );
+  mesh.rotation.set(0, slot.rotation, 0);
+  mesh.scale.set(s, s, s);
+  mesh.updateMatrixWorld(true);
+
+  return mesh;
 }
 
 let lastUpdateFrame = -1;
@@ -482,7 +619,7 @@ export function updateGLBResourceInstancer(): void {
   const playerPos = localPlayer?.node?.position ?? camPos;
 
   for (const pool of pools.values()) {
-    for (const lodPool of [pool.lod0, pool.lod1, pool.lod2]) {
+    for (const lodPool of [pool.lod0, pool.lod1, pool.lod2, pool.depleted]) {
       if (!lodPool) continue;
 
       if (lodPool.dirty) {
