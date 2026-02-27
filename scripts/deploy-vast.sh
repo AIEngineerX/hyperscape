@@ -72,8 +72,79 @@ git lfs install || true
 echo "[deploy] Checking GPU status..."
 nvidia-smi || echo "[deploy] WARNING: nvidia-smi not available"
 
-echo "[deploy] Checking Vulkan support..."
+# Force NVIDIA-only Vulkan ICD to avoid conflicts with Mesa ICDs
+export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/nvidia_icd.json"
+
+echo "[deploy] Checking Vulkan support (NVIDIA-only)..."
 vulkaninfo --summary 2>/dev/null || echo "[deploy] WARNING: Vulkan may not be available"
+
+# ── Setup Xorg for NVIDIA headless rendering (instead of Xvfb) ──
+# Xvfb is a SOFTWARE framebuffer that cannot access the GPU.
+# For WebGPU to work, we need Xorg configured for NVIDIA headless rendering.
+echo "[deploy] Setting up Xorg for NVIDIA headless GPU rendering..."
+
+# Kill any existing Xvfb or Xorg instances
+pkill -9 Xvfb 2>/dev/null || true
+pkill -9 Xorg 2>/dev/null || true
+sleep 2
+
+# Install Xorg if not present
+apt-get install -y xserver-xorg-core xserver-xorg-video-nvidia-* 2>/dev/null || true
+
+# Create NVIDIA headless Xorg config
+mkdir -p /etc/X11
+cat > /etc/X11/xorg-nvidia-headless.conf << 'XORGEOF'
+# NVIDIA Headless Xorg Configuration for WebGPU Streaming
+# This config allows GPU-accelerated rendering without a physical display
+
+Section "ServerLayout"
+    Identifier     "Layout0"
+    Screen      0  "Screen0"
+EndSection
+
+Section "Device"
+    Identifier     "Device0"
+    Driver         "nvidia"
+    VendorName     "NVIDIA Corporation"
+    Option         "AllowEmptyInitialConfiguration" "True"
+    Option         "UseDisplayDevice" "None"
+EndSection
+
+Section "Screen"
+    Identifier     "Screen0"
+    Device         "Device0"
+    DefaultDepth    24
+    SubSection     "Display"
+        Depth       24
+        Modes      "1920x1080" "1280x720"
+    EndSubSection
+EndSection
+XORGEOF
+
+# Start Xorg on display :99 with NVIDIA headless config
+echo "[deploy] Starting Xorg on :99 with NVIDIA GPU..."
+Xorg :99 -config /etc/X11/xorg-nvidia-headless.conf -noreset -logfile /var/log/Xorg.99.log &
+XORG_PID=$!
+sleep 5
+
+# Verify Xorg started
+if kill -0 $XORG_PID 2>/dev/null; then
+    echo "[deploy] Xorg :99 started successfully (PID: $XORG_PID)"
+    export DISPLAY=:99
+
+    # Verify GPU is accessible through Xorg
+    if glxinfo 2>/dev/null | grep -q "NVIDIA"; then
+        echo "[deploy] GPU rendering confirmed via Xorg"
+    else
+        echo "[deploy] WARNING: glxinfo doesn't show NVIDIA - checking X anyway"
+    fi
+else
+    echo "[deploy] WARNING: Xorg failed to start, falling back to Xvfb"
+    # Fallback to Xvfb (software rendering - WebGPU won't work)
+    Xvfb :99 -screen 0 1920x1080x24 &
+    export DISPLAY=:99
+    sleep 3
+fi
 
 # ── Install Chrome Dev channel (has WebGPU enabled by default) ─
 echo "[deploy] Installing Chrome Dev channel for WebGPU support..."
@@ -268,6 +339,21 @@ echo "[deploy] X_RTMP_URL: ${X_RTMP_URL:+***configured***}${X_RTMP_URL:-NOT SET}
 echo "[deploy] KICK_STREAM_KEY: ${KICK_STREAM_KEY:+***configured***}${KICK_STREAM_KEY:-NOT SET}"
 echo "[deploy] KICK_RTMP_URL: ${KICK_RTMP_URL:+***configured***}${KICK_RTMP_URL:-NOT SET}"
 echo "[deploy] YOUTUBE_STREAM_KEY: DISABLED"
+
+# ── Ensure GPU environment is set for PM2 ─────────────────────
+# These must be exported so ecosystem.config.cjs and child processes can access them
+export DISPLAY="${DISPLAY:-:99}"
+export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/nvidia_icd.json"
+# Use Xorg (started above) instead of Xvfb - critical for WebGPU/GPU rendering
+export DUEL_CAPTURE_USE_XVFB="false"
+echo "[deploy] GPU environment: DISPLAY=$DISPLAY, VK_ICD_FILENAMES=$VK_ICD_FILENAMES, DUEL_CAPTURE_USE_XVFB=$DUEL_CAPTURE_USE_XVFB"
+
+# Verify display is accessible
+if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+    echo "[deploy] Display $DISPLAY is accessible"
+else
+    echo "[deploy] WARNING: Display $DISPLAY is not accessible"
+fi
 
 # ── Start duel stack via pm2 ─────────────────────────────────
 echo "[deploy] Starting Hyperscape duel stack via pm2..."

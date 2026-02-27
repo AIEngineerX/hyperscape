@@ -98,7 +98,7 @@ module.exports = {
                 STREAM_CAPTURE_ANGLE: "vulkan",
                 STREAM_CAPTURE_WIDTH: "1280",
                 STREAM_CAPTURE_HEIGHT: "720",
-                // Enable WebGPU (requires working Vulkan - now using Lavapipe)
+                // Enable WebGPU (requires working Vulkan - using NVIDIA via Xorg headless)
                 STREAM_CAPTURE_DISABLE_WEBGPU: "false",
                 FFMPEG_PATH: "/usr/bin/ffmpeg",
                 DUEL_DISABLE_BRIDGE_CAPTURE: "false",
@@ -141,7 +141,11 @@ module.exports = {
                 GAME_URL: "http://localhost:3333/?page=stream",
                 GAME_FALLBACK_URLS:
                     "http://localhost:3333/?page=stream,http://localhost:3333/?embedded=true&mode=spectator,http://localhost:3333/",
-                DUEL_CAPTURE_USE_XVFB: "true",
+                // Use Xorg (started by deploy-vast.sh) instead of Xvfb for NVIDIA GPU rendering
+                // Xvfb is software-only and cannot provide GPU access for WebGPU
+                DUEL_CAPTURE_USE_XVFB: "false",
+                // Xorg display set by deploy-vast.sh (defaults to :99)
+                DISPLAY: process.env.DISPLAY || ":99",
                 // Stabilize long-running streams by avoiding per-agent DuelCombatAI state polling churn.
                 STREAMING_DUEL_COMBAT_AI_ENABLED: "false",
                 SERVER_RUNTIME_MAX_TICKS_PER_FRAME: "1",
