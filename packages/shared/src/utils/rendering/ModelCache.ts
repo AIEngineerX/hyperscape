@@ -64,7 +64,7 @@ interface CachedModel {
 
 const PROCESSED_DB_NAME = "hyperscape-processed-models";
 const PROCESSED_STORE_NAME = "models";
-const PROCESSED_CACHE_VERSION = 3;
+const PROCESSED_CACHE_VERSION = 4;
 
 /** Serialized mesh data for IndexedDB storage */
 interface SerializedMesh {
@@ -75,7 +75,8 @@ interface SerializedMesh {
   uvs?: ArrayBuffer;
   uv2s?: ArrayBuffer;
   colors?: ArrayBuffer;
-  indices?: ArrayBuffer; // Uint32Array
+  indices?: ArrayBuffer;
+  indexType?: "Uint16" | "Uint32";
   skinWeights?: ArrayBuffer;
   skinIndices?: ArrayBuffer;
   /** Material properties (not the GPU material itself) */
@@ -393,7 +394,11 @@ export class ModelCache {
         const colors = geo.getAttribute("color");
         if (colors) sm.colors = colors.array.buffer.slice(0);
 
-        if (geo.index) sm.indices = geo.index.array.buffer.slice(0);
+        if (geo.index) {
+          sm.indices = geo.index.array.buffer.slice(0);
+          sm.indexType =
+            geo.index.array instanceof Uint16Array ? "Uint16" : "Uint32";
+        }
 
         // Skinning data
         if (node instanceof THREE.SkinnedMesh) {
@@ -619,7 +624,9 @@ export class ModelCache {
         );
       }
       if (sm.indices) {
-        geo.setIndex(new THREE.BufferAttribute(new Uint32Array(sm.indices), 1));
+        const IndexArray =
+          sm.indexType === "Uint16" ? Uint16Array : Uint32Array;
+        geo.setIndex(new THREE.BufferAttribute(new IndexArray(sm.indices), 1));
       }
       if (sm.skinWeights) {
         geo.setAttribute(
