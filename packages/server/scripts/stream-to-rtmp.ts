@@ -365,20 +365,10 @@ async function launchCaptureBrowser() {
     : "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
 
   // Determine GL backend: Use ANGLE/Vulkan for WebGPU support
-  // Note: --use-gl=egl doesn't support WebGPU, so we always use ANGLE
-  const glArgs = STREAM_CAPTURE_USE_EGL
-    ? [
-        // Headless mode with ANGLE/Vulkan for WebGPU
-        // --use-gl=egl doesn't work for WebGPU - must use ANGLE
-        "--use-gl=angle",
-        "--use-angle=vulkan",
-        "--ozone-platform=headless",
-      ]
-    : [
-        // ANGLE mode (requires display server)
-        "--use-gl=angle",
-        `--use-angle=${ANGLE_BACKEND}`,
-      ];
+  // When running headless with no display, Chrome's --headless=new mode handles
+  // compositor setup automatically - we don't force --ozone-platform=headless
+  // because that uses a software compositor without WebGPU support
+  const glArgs = ["--use-gl=angle", "--use-angle=vulkan"];
 
   // Headless mode configuration
   // Playwright's headless option only accepts boolean
