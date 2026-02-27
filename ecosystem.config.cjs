@@ -142,9 +142,15 @@ module.exports = {
                 GAME_FALLBACK_URLS:
                     "http://localhost:3333/?page=stream,http://localhost:3333/?embedded=true&mode=spectator,http://localhost:3333/",
                 // Hardware GPU rendering required - no Xvfb software fallback
-                // Xorg with NVIDIA is started by deploy-vast.sh on display :99
+                // deploy-vast.sh sets up either Xorg or headless EGL mode
                 DUEL_CAPTURE_USE_XVFB: "false",
-                DISPLAY: process.env.DISPLAY || ":99",
+                DISPLAY: process.env.DISPLAY || "",
+                // Headless EGL mode (for containers without DRM/DRI access)
+                STREAM_CAPTURE_HEADLESS:
+                    process.env.STREAM_CAPTURE_HEADLESS || "false",
+                STREAM_CAPTURE_USE_EGL:
+                    process.env.STREAM_CAPTURE_USE_EGL || "false",
+                GPU_RENDERING_MODE: process.env.GPU_RENDERING_MODE || "xorg",
                 // Stabilize long-running streams by avoiding per-agent DuelCombatAI state polling churn.
                 STREAMING_DUEL_COMBAT_AI_ENABLED: "false",
                 SERVER_RUNTIME_MAX_TICKS_PER_FRAME: "1",

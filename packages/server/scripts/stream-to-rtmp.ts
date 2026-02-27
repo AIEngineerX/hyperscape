@@ -117,8 +117,16 @@ const CAPTURE_MODE = (process.env.STREAM_CAPTURE_MODE?.trim() || "cdp") as
   | "cdp"
   | "mediarecorder"
   | "webcodecs";
-const STREAM_CAPTURE_HEADLESS = process.env.STREAM_CAPTURE_HEADLESS === "true";
+// Headless modes: false (with display), true (legacy headless), "new" (Chrome's new headless with GPU)
+const STREAM_CAPTURE_HEADLESS_RAW =
+  process.env.STREAM_CAPTURE_HEADLESS?.trim() || "false";
+const STREAM_CAPTURE_HEADLESS =
+  STREAM_CAPTURE_HEADLESS_RAW === "true" ||
+  STREAM_CAPTURE_HEADLESS_RAW === "new";
+const STREAM_CAPTURE_HEADLESS_NEW = STREAM_CAPTURE_HEADLESS_RAW === "new";
 const STREAM_CAPTURE_CHANNEL = process.env.STREAM_CAPTURE_CHANNEL?.trim() || "";
+// Use EGL directly (for headless GPU rendering without X server)
+const STREAM_CAPTURE_USE_EGL = process.env.STREAM_CAPTURE_USE_EGL === "true";
 const ANGLE_BACKEND =
   process.env.STREAM_CAPTURE_ANGLE?.trim() ||
   (process.platform === "darwin" ? "metal" : "vulkan");
@@ -355,12 +363,30 @@ async function launchCaptureBrowser() {
   const featureFlags = STREAM_CAPTURE_DISABLE_WEBGPU
     ? "--enable-features=UseSkiaRenderer"
     : "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
+
+  // Determine GL backend: EGL for headless GPU rendering, ANGLE otherwise
+  const glArgs = STREAM_CAPTURE_USE_EGL
+    ? [
+        // EGL mode for headless GPU rendering (works without X server)
+        "--use-gl=egl",
+        "--ozone-platform=headless",
+      ]
+    : [
+        // ANGLE mode (requires display server)
+        "--use-gl=angle",
+        `--use-angle=${ANGLE_BACKEND}`,
+      ];
+
+  // Headless mode configuration
+  const headlessArg = STREAM_CAPTURE_HEADLESS_NEW
+    ? "new"
+    : STREAM_CAPTURE_HEADLESS;
+
   const launchConfig = {
-    headless: STREAM_CAPTURE_HEADLESS,
+    headless: headlessArg,
     args: [
       // GPU / WebGPU essentials
-      "--use-gl=angle",
-      `--use-angle=${ANGLE_BACKEND}`,
+      ...glArgs,
       "--enable-webgl",
       ...(STREAM_CAPTURE_DISABLE_WEBGPU
         ? ["--disable-webgpu"]
@@ -368,6 +394,13 @@ async function launchCaptureBrowser() {
       featureFlags,
       "--ignore-gpu-blocklist",
       "--enable-gpu-rasterization",
+      // Enable GPU features in headless mode
+      ...(STREAM_CAPTURE_HEADLESS_NEW
+        ? [
+            "--enable-features=UseOzonePlatform,VaapiVideoDecoder,VaapiVideoEncoder",
+            "--enable-gpu-memory-buffer-video-frames",
+          ]
+        : []),
       // Sandbox & stability
       "--no-sandbox",
       "--disable-dev-shm-usage",
@@ -438,8 +471,12 @@ async function launchCaptureBrowser() {
 async function setupBrowser() {
   if (browser) await cleanup();
 
+  const glMode = STREAM_CAPTURE_USE_EGL ? "egl" : `angle/${ANGLE_BACKEND}`;
+  const headlessMode = STREAM_CAPTURE_HEADLESS_NEW
+    ? "new"
+    : STREAM_CAPTURE_HEADLESS;
   console.log(
-    `[Main] Launching browser (headless=${STREAM_CAPTURE_HEADLESS}, angle=${ANGLE_BACKEND}${STREAM_CAPTURE_CHANNEL ? `, channel=${STREAM_CAPTURE_CHANNEL}` : ""}, mode=${CAPTURE_MODE})...`,
+    `[Main] Launching browser (headless=${headlessMode}, gl=${glMode}${STREAM_CAPTURE_CHANNEL ? `, channel=${STREAM_CAPTURE_CHANNEL}` : ""}, mode=${CAPTURE_MODE})...`,
   );
   browser = await launchCaptureBrowser();
 

@@ -78,16 +78,13 @@ export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/nvidia_icd.json"
 echo "[deploy] Checking Vulkan support (NVIDIA-only)..."
 vulkaninfo --summary 2>/dev/null || echo "[deploy] WARNING: Vulkan may not be available"
 
-# ── Setup Xorg with NVIDIA GPU (REQUIRED - no software fallback) ──
-# WebGPU requires hardware GPU rendering. Xvfb is software-only and won't work.
+# ── Setup GPU Rendering for WebGPU ──
+# WebGPU requires hardware GPU rendering. We try multiple approaches:
+# 1. Xorg with NVIDIA (best if DRI/DRM devices are available)
+# 2. Chrome headless with EGL (works without X server in containers)
 echo "[deploy] ═══════════════════════════════════════════════════════════"
-echo "[deploy] Setting up Xorg with NVIDIA GPU (hardware rendering required)"
+echo "[deploy] Setting up GPU rendering for WebGPU streaming"
 echo "[deploy] ═══════════════════════════════════════════════════════════"
-
-# Kill any existing display servers
-pkill -9 Xvfb 2>/dev/null || true
-pkill -9 Xorg 2>/dev/null || true
-sleep 2
 
 # Verify NVIDIA GPU is available
 if ! command -v nvidia-smi &>/dev/null; then
@@ -104,62 +101,75 @@ fi
 echo "[deploy] NVIDIA GPU detected:"
 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
 
-# Get the NVIDIA driver version for matching packages
-NVIDIA_DRIVER_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | cut -d. -f1)
-echo "[deploy] NVIDIA driver major version: $NVIDIA_DRIVER_VERSION"
+# Check what GPU access we have
+echo "[deploy] Checking GPU device access..."
+ls -la /dev/dri/ 2>/dev/null || echo "[deploy] No /dev/dri directory (DRM not available)"
+ls -la /dev/nvidia* 2>/dev/null || echo "[deploy] Checking NVIDIA devices..."
 
-# Install Xorg and NVIDIA X driver components
-echo "[deploy] Installing Xorg and NVIDIA X11 driver packages..."
+# Check EGL support (works without X server)
+echo "[deploy] Checking EGL support..."
+if [ -f "/usr/lib/x86_64-linux-gnu/libEGL_nvidia.so.0" ] || \
+   [ -f "/usr/lib/libEGL_nvidia.so.0" ]; then
+    echo "[deploy] ✓ NVIDIA EGL library found"
+    HAS_NVIDIA_EGL=true
+else
+    echo "[deploy] NVIDIA EGL library not found"
+    HAS_NVIDIA_EGL=false
+fi
+
+# Install required packages
+echo "[deploy] Installing required packages..."
 apt-get update
 apt-get install -y \
-    xserver-xorg-core \
-    xserver-xorg-video-nvidia-${NVIDIA_DRIVER_VERSION} \
-    libnvidia-gl-${NVIDIA_DRIVER_VERSION} \
+    mesa-utils \
     libglvnd0 \
     libgl1 \
     libglx0 \
     libegl1 \
     libgles2 \
-    mesa-utils \
     x11-xserver-utils \
-    2>&1 || {
-        echo "[deploy] WARNING: Some packages failed to install, trying fallback..."
-        # Fallback: try without version-specific packages
-        apt-get install -y \
-            xserver-xorg-core \
-            nvidia-driver-${NVIDIA_DRIVER_VERSION} \
-            mesa-utils \
-            x11-xserver-utils \
-            2>&1 || true
-    }
+    2>&1 || true
 
-# Create NVIDIA headless Xorg config
-mkdir -p /etc/X11
-cat > /etc/X11/xorg-nvidia-headless.conf << 'XORGEOF'
-# NVIDIA Headless Xorg Configuration for WebGPU Streaming
-# Allows GPU-accelerated rendering without a physical display
+# Determine rendering mode
+# Priority: Xorg with NVIDIA > Chrome headless with EGL
+RENDERING_MODE="unknown"
+export DISPLAY=""
+export DUEL_CAPTURE_USE_XVFB="false"
 
+# Kill any existing display servers
+pkill -9 Xvfb 2>/dev/null || true
+pkill -9 Xorg 2>/dev/null || true
+sleep 2
+
+# Try Xorg if DRI devices exist
+if [ -d "/dev/dri" ] && [ -e "/dev/dri/card0" -o -e "/dev/dri/card1" ]; then
+    echo "[deploy] DRI devices found, attempting Xorg setup..."
+
+    # Get GPU BusID for Xorg config
+    GPU_BUS_ID=$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader | head -1)
+    BUS_HEX=$(echo "$GPU_BUS_ID" | cut -d: -f2)
+    DEVICE_HEX=$(echo "$GPU_BUS_ID" | cut -d: -f3 | cut -d. -f1)
+    FUNC=$(echo "$GPU_BUS_ID" | cut -d. -f2)
+    BUS_DEC=$((16#$BUS_HEX))
+    DEVICE_DEC=$((16#$DEVICE_HEX))
+    XORG_BUS_ID="PCI:${BUS_DEC}:${DEVICE_DEC}:${FUNC}"
+    echo "[deploy] GPU BusID: $XORG_BUS_ID"
+
+    apt-get install -y xserver-xorg-core 2>&1 || true
+
+    mkdir -p /etc/X11
+    cat > /etc/X11/xorg-nvidia-headless.conf << XORGEOF
 Section "ServerLayout"
     Identifier     "Layout0"
     Screen      0  "Screen0"
 EndSection
 
-Section "Files"
-    ModulePath   "/usr/lib/xorg/modules"
-    ModulePath   "/usr/lib/x86_64-linux-gnu/nvidia/xorg"
-EndSection
-
-Section "Module"
-    Load         "glx"
-EndSection
-
 Section "Device"
     Identifier     "Device0"
     Driver         "nvidia"
-    VendorName     "NVIDIA Corporation"
+    BusID          "$XORG_BUS_ID"
     Option         "AllowEmptyInitialConfiguration" "True"
     Option         "UseDisplayDevice" "None"
-    Option         "ConnectToAcpid" "False"
 EndSection
 
 Section "Screen"
@@ -169,64 +179,48 @@ Section "Screen"
     SubSection     "Display"
         Depth       24
         Virtual    1920 1080
-        Modes      "1920x1080" "1280x720"
     EndSubSection
-EndSection
-
-Section "ServerFlags"
-    Option         "AllowMouseOpenFail" "True"
-    Option         "AutoAddDevices" "False"
-    Option         "AutoEnableDevices" "False"
 EndSection
 XORGEOF
 
-# Start Xorg on display :99
-echo "[deploy] Starting Xorg on :99 with NVIDIA GPU..."
-Xorg :99 -config /etc/X11/xorg-nvidia-headless.conf -noreset -logfile /var/log/Xorg.99.log 2>&1 &
-XORG_PID=$!
+    Xorg :99 -config /etc/X11/xorg-nvidia-headless.conf -noreset -logfile /var/log/Xorg.99.log 2>&1 &
+    XORG_PID=$!
+    sleep 5
 
-# Wait for Xorg to initialize
-for i in {1..10}; do
-    sleep 1
-    if xdpyinfo -display :99 >/dev/null 2>&1; then
-        echo "[deploy] Xorg :99 is responding (attempt $i)"
-        break
+    if kill -0 $XORG_PID 2>/dev/null && xdpyinfo -display :99 >/dev/null 2>&1; then
+        export DISPLAY=:99
+        RENDERING_MODE="xorg"
+        echo "[deploy] ✓ Xorg started successfully on :99"
+    else
+        echo "[deploy] Xorg failed to start, will use headless EGL mode"
+        cat /var/log/Xorg.99.log 2>/dev/null | tail -20 || true
+        pkill -9 Xorg 2>/dev/null || true
     fi
-    echo "[deploy] Waiting for Xorg to start... (attempt $i/10)"
-done
-
-# Verify Xorg started and is functional
-if ! kill -0 $XORG_PID 2>/dev/null; then
-    echo "[deploy] FATAL: Xorg process died. Check /var/log/Xorg.99.log:"
-    cat /var/log/Xorg.99.log 2>/dev/null | tail -50
-    exit 1
-fi
-
-if ! xdpyinfo -display :99 >/dev/null 2>&1; then
-    echo "[deploy] FATAL: Xorg process running but X server not responding"
-    echo "[deploy] Xorg log:"
-    cat /var/log/Xorg.99.log 2>/dev/null | tail -50
-    exit 1
-fi
-
-export DISPLAY=:99
-echo "[deploy] Xorg :99 started successfully (PID: $XORG_PID)"
-
-# Verify GPU rendering works through Xorg
-echo "[deploy] Verifying GPU rendering via GLX..."
-if glxinfo -display :99 2>/dev/null | grep -q "NVIDIA"; then
-    echo "[deploy] ✓ GLX rendering confirmed with NVIDIA GPU"
-    glxinfo -display :99 2>/dev/null | grep -E "OpenGL (vendor|renderer|version)" | head -3
 else
-    echo "[deploy] WARNING: GLX not showing NVIDIA. Checking glxinfo output:"
-    glxinfo -display :99 2>&1 | head -20 || true
-    echo "[deploy] This may cause WebGPU issues but continuing..."
+    echo "[deploy] No DRI devices available (container without DRM access)"
 fi
 
-# No Xvfb fallback - hardware rendering is required
-export DUEL_CAPTURE_USE_XVFB="false"
-echo "[deploy] ✓ Xorg with NVIDIA GPU configured successfully"
-echo "[deploy] DISPLAY=$DISPLAY, DUEL_CAPTURE_USE_XVFB=$DUEL_CAPTURE_USE_XVFB"
+# If Xorg didn't work, configure for Chrome headless with EGL
+if [ "$RENDERING_MODE" = "unknown" ]; then
+    echo "[deploy] Configuring Chrome headless mode with EGL..."
+    RENDERING_MODE="headless-egl"
+
+    # Chrome's headless mode with --use-gl=egl can use NVIDIA EGL without X
+    # We set DISPLAY empty and use special Chrome flags
+    export DISPLAY=""
+    export STREAM_CAPTURE_HEADLESS="new"  # Use Chrome's new headless mode
+    export STREAM_CAPTURE_USE_EGL="true"
+
+    echo "[deploy] ✓ Configured for Chrome headless EGL mode"
+fi
+
+# Export rendering mode for the streaming bridge
+export GPU_RENDERING_MODE="$RENDERING_MODE"
+echo "[deploy] ═══════════════════════════════════════════════════════════"
+echo "[deploy] GPU Rendering Mode: $RENDERING_MODE"
+echo "[deploy] DISPLAY: ${DISPLAY:-'(none - headless)'}"
+echo "[deploy] DUEL_CAPTURE_USE_XVFB: $DUEL_CAPTURE_USE_XVFB"
+echo "[deploy] ═══════════════════════════════════════════════════════════"
 
 # ── Install Chrome Dev channel (has WebGPU enabled by default) ─
 echo "[deploy] Installing Chrome Dev channel for WebGPU support..."
