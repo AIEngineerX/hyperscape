@@ -92,6 +92,7 @@ import type {
   FriendIdPayload,
   IgnoreIdPayload,
   PrivateMessagePayload,
+  CorpseLootAllPayload,
 } from "./types";
 
 // Import modular components
@@ -357,7 +358,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     string,
     Array<{
       id: string;
-      type: "situation" | "evaluation" | "thinking" | "decision";
+      type: "situation" | "evaluation" | "thinking" | "decision" | "action";
       content: string;
       timestamp: number;
     }>
@@ -1857,6 +1858,19 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     this.handlers["onPickupItem"] = (socket, data) =>
       handlePickupItem(socket, data, this.world);
+
+    // Gravestone loot-all: client requests to loot all items from a gravestone
+    this.handlers["onCorpseLootAll"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+      const payload = data as CorpseLootAllPayload;
+      if (!payload.corpseId) return;
+      this.world.emit(EventType.CORPSE_LOOT_ALL_REQUEST, {
+        corpseId: payload.corpseId,
+        playerId: player.id,
+      });
+    };
+    this.handlers["corpseLootAll"] = this.handlers["onCorpseLootAll"];
 
     this.handlers["onDropItem"] = (socket, data) =>
       handleDropItem(socket, data, this.world);

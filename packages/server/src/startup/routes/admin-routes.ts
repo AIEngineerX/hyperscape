@@ -1007,6 +1007,473 @@ export function registerAdminRoutes(
     },
   );
 
+  /**
+   * GET /admin/agents/monitor
+   * Real-time agent monitoring data (all in-memory, zero DB queries)
+   * Merges both embedded agents (AgentManager) and model agents (ModelAgentSpawner)
+   */
+  fastify.get(
+    "/admin/agents/monitor",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const { getAgentManager, getRunningAgents } =
+          await import("../../eliza/index.js");
+        const { ServerNetwork } =
+          await import("../../systems/ServerNetwork/index.js");
+        const agentManager = getAgentManager();
+
+        // Get ECS systems for inventory/equipment/skills/quests lookup
+        const inventorySystem = world.getSystem("inventory") as {
+          getInventory?: (entityId: string) => {
+            items: Array<{
+              slot: number;
+              itemId: string;
+              quantity: number;
+            }>;
+          } | null;
+        } | null;
+        const equipmentSystem = world.getSystem("equipment") as {
+          getPlayerEquipment?: (
+            entityId: string,
+          ) => Record<
+            string,
+            string | { itemId?: string | null; slot?: string } | null
+          > | null;
+        } | null;
+        const skillsSystem = world.getSystem("skills") as {
+          getSkills?: (
+            entityId: string,
+          ) => Record<string, { level: number; xp: number }> | undefined;
+        } | null;
+        const questSystem = world.getSystem("quest") as {
+          getActiveQuests?: (playerId: string) => Array<{
+            questId: string;
+            status: string;
+            currentStage: string;
+            stageProgress: Record<string, number>;
+            startedAt?: number;
+            completedAt?: number;
+          }>;
+          getQuestStatus?: (playerId: string, questId: string) => string;
+          getQuestDefinition?: (questId: string) =>
+            | {
+                id: string;
+                name: string;
+                description: string;
+                difficulty: string;
+                startNpc: string;
+                stages: Array<{
+                  id: string;
+                  type: string;
+                  description: string;
+                  target?: string;
+                  count?: number;
+                }>;
+              }
+            | undefined;
+          getAllQuestDefinitions?: () => Array<{
+            id: string;
+            name: string;
+            description: string;
+            difficulty: string;
+          }>;
+          hasCompletedQuest?: (playerId: string, questId: string) => boolean;
+          getQuestPoints?: (playerId: string) => number;
+        } | null;
+        // Bank data: read from database (BankingSystem in-memory cache is not populated from DB)
+        const dbSystem = world.getSystem<DatabaseSystem>("database");
+        const bankRepo = dbSystem?.getBankRepository() ?? null;
+
+        // Helper: build monitor data for an agent given its characterId
+        const buildAgentData = async (
+          characterId: string,
+          name: string,
+          state: string,
+          startedAt: number,
+          lastActivity: number,
+          scriptedRole?: string,
+          error?: string,
+        ) => {
+          // Try to get game state from embedded service first
+          const service = agentManager?.getAgentService(characterId);
+          const gameState = service?.getGameState() ?? null;
+
+          // World entity data (works for both embedded and model agents)
+          const entity = world.entities.get(characterId);
+          const entityData = entity
+            ? (entity.data as Record<string, unknown>)
+            : null;
+
+          // Get goal from ServerNetwork (synced by agent plugins)
+          const goal =
+            (ServerNetwork.agentGoals.get(characterId) as {
+              type?: string;
+              description?: string;
+              progress?: number;
+              target?: number;
+              location?: string;
+              targetSkill?: string;
+              startedAt?: number;
+              locked?: boolean;
+            } | null) ?? null;
+          const goalsPaused =
+            ServerNetwork.agentGoalsPaused.get(characterId) ?? false;
+
+          // Get thoughts from ServerNetwork
+          const rawThoughts =
+            ServerNetwork.agentThoughts.get(characterId) ?? [];
+          const recentThoughts = rawThoughts.slice(0, 10).map((t) => ({
+            id: t.id,
+            type: t.type,
+            content: t.content,
+            timestamp: t.timestamp,
+          }));
+
+          // Skills: gameState > SkillsSystem > entity.data.skills
+          let skills: Record<string, { level: number; xp: number }> = {};
+          if (gameState?.skills && Object.keys(gameState.skills).length > 0) {
+            skills = gameState.skills;
+          } else if (skillsSystem?.getSkills) {
+            try {
+              const sysSkills = skillsSystem.getSkills(characterId);
+              if (sysSkills && Object.keys(sysSkills).length > 0) {
+                skills = sysSkills;
+              }
+            } catch {
+              /* entity may not have skills */
+            }
+          }
+          if (Object.keys(skills).length === 0 && entityData?.skills) {
+            skills = entityData.skills as Record<
+              string,
+              { level: number; xp: number }
+            >;
+          }
+          let totalLevel = 0;
+          let combatLevel = 0;
+          const combatSkillNames = [
+            "attack",
+            "strength",
+            "defense",
+            "constitution",
+            "ranged",
+          ];
+          for (const [skillName, skill] of Object.entries(skills)) {
+            totalLevel += skill.level;
+            if (combatSkillNames.includes(skillName)) {
+              combatLevel += skill.level;
+            }
+          }
+          combatLevel = Math.floor(combatLevel / 5);
+
+          // Inventory: gameState > InventorySystem
+          let inventory: Array<{
+            slot: number;
+            itemId: string;
+            quantity: number;
+          }> = [];
+          if (gameState?.inventory && gameState.inventory.length > 0) {
+            inventory = gameState.inventory;
+          } else if (inventorySystem?.getInventory) {
+            try {
+              const inv = inventorySystem.getInventory(characterId);
+              if (inv?.items) {
+                inventory = inv.items
+                  .filter(
+                    (i: { itemId: string }) => i.itemId && i.itemId !== "",
+                  )
+                  .map(
+                    (i: {
+                      slot: number;
+                      itemId: string;
+                      quantity: number;
+                    }) => ({
+                      slot: i.slot,
+                      itemId: i.itemId,
+                      quantity: i.quantity,
+                    }),
+                  );
+              }
+            } catch {
+              /* entity may not have inventory */
+            }
+          }
+          const inventoryUsed = inventory.filter(
+            (i) => i.itemId && i.itemId !== "",
+          ).length;
+
+          // Equipment: gameState > EquipmentSystem
+          const equipment: Record<string, string> = {};
+          if (gameState?.equipment) {
+            for (const [slot, eq] of Object.entries(gameState.equipment)) {
+              if (eq?.itemId) {
+                equipment[slot] = eq.itemId;
+              }
+            }
+          } else if (equipmentSystem?.getPlayerEquipment) {
+            try {
+              const eq = equipmentSystem.getPlayerEquipment(characterId);
+              if (eq) {
+                for (const [slot, value] of Object.entries(eq)) {
+                  // Skip non-slot keys like "playerId", "totalStats"
+                  if (slot === "playerId" || slot === "totalStats" || !value)
+                    continue;
+                  // value can be a string itemId or an object {itemId: string}
+                  if (typeof value === "string") {
+                    equipment[slot] = value;
+                  } else if (
+                    typeof value === "object" &&
+                    "itemId" in value &&
+                    value.itemId
+                  ) {
+                    equipment[slot] = value.itemId as string;
+                  }
+                }
+              }
+            } catch {
+              /* entity may not have equipment */
+            }
+          }
+
+          // Position: gameState > entity
+          let position: [number, number, number] | null =
+            gameState?.position ?? null;
+          if (!position && entity) {
+            const pos = entity.position;
+            if (pos) {
+              position = [pos.x ?? 0, pos.y ?? 0, pos.z ?? 0] as [
+                number,
+                number,
+                number,
+              ];
+            }
+          }
+
+          // Health
+          const health =
+            gameState?.health ?? (entityData?.health as number) ?? 0;
+          const maxHealth =
+            gameState?.maxHealth ?? (entityData?.maxHealth as number) ?? 10;
+
+          // Coins
+          const coins = (entityData?.coins as number) ?? 0;
+
+          // Quests: active, completed, and available
+          let quests: Array<{
+            questId: string;
+            name: string;
+            status: string;
+            currentStage?: string;
+            stageDescription?: string;
+            stageProgress?: Record<string, number>;
+          }> = [];
+          let questPoints = 0;
+          if (questSystem) {
+            try {
+              // Get all quest definitions and build status for each
+              const allDefs = questSystem.getAllQuestDefinitions?.() ?? [];
+              questPoints = questSystem.getQuestPoints?.(characterId) ?? 0;
+
+              for (const def of allDefs) {
+                const status =
+                  questSystem.getQuestStatus?.(characterId, def.id) ??
+                  "not_started";
+                const quest: {
+                  questId: string;
+                  name: string;
+                  status: string;
+                  currentStage?: string;
+                  stageDescription?: string;
+                  stageProgress?: Record<string, number>;
+                } = {
+                  questId: def.id,
+                  name: def.name,
+                  status,
+                };
+
+                // Add progress details for active quests
+                if (
+                  status === "in_progress" ||
+                  status === "ready_to_complete"
+                ) {
+                  const activeQuests =
+                    questSystem.getActiveQuests?.(characterId) ?? [];
+                  const active = activeQuests.find((q) => q.questId === def.id);
+                  if (active) {
+                    quest.currentStage = active.currentStage;
+                    quest.stageProgress = active.stageProgress;
+                    // Get stage description from definition
+                    const fullDef = questSystem.getQuestDefinition?.(def.id);
+                    const stage = fullDef?.stages.find(
+                      (s) => s.id === active.currentStage,
+                    );
+                    quest.stageDescription = stage?.description;
+                  }
+                }
+
+                // Only include quests that aren't not_started
+                if (status !== "not_started") {
+                  quests.push(quest);
+                }
+              }
+
+              // Sort: in_progress first, then ready_to_complete, then completed
+              const statusOrder: Record<string, number> = {
+                in_progress: 0,
+                ready_to_complete: 1,
+                completed: 2,
+              };
+              quests.sort(
+                (a, b) =>
+                  (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3),
+              );
+            } catch {
+              /* quest system may not be ready */
+            }
+          }
+
+          // Bank data: query database directly (BankingSystem in-memory cache is not DB-backed)
+          let bankItems: Array<{
+            itemId: string;
+            quantity: number;
+            slot: number;
+            tabIndex: number;
+          }> = [];
+          if (bankRepo) {
+            try {
+              bankItems = await bankRepo.getPlayerBank(characterId);
+            } catch {
+              /* database may not be ready */
+            }
+          }
+
+          return {
+            characterId,
+            name,
+            state,
+            scriptedRole,
+            startedAt,
+            lastActivity,
+            error,
+
+            entityId: gameState?.playerId ?? (entity ? characterId : null),
+            position,
+            health,
+            maxHealth,
+            alive: gameState?.alive ?? entityData?.alive !== false,
+            inCombat:
+              gameState?.inCombat ??
+              !!(entityData?.inCombat || entityData?.combatTarget),
+            combatTarget:
+              gameState?.currentTarget ??
+              (entityData?.combatTarget as string) ??
+              null,
+
+            goal: goal
+              ? {
+                  type: goal.type ?? "idle",
+                  description: goal.description ?? "",
+                  progress: goal.progress ?? 0,
+                  target: goal.target ?? 0,
+                  location: goal.location,
+                  targetSkill: goal.targetSkill,
+                  startedAt: goal.startedAt ?? 0,
+                  locked: goal.locked ?? false,
+                }
+              : null,
+            goalsPaused,
+
+            skills,
+            combatLevel,
+            totalLevel,
+
+            inventory: inventory.map((i) => ({
+              slot: i.slot,
+              itemId: i.itemId,
+              quantity: i.quantity,
+            })),
+            inventoryUsed,
+            inventoryMax: 28,
+            coins,
+            equipment,
+
+            recentThoughts,
+
+            quests,
+            questPoints,
+
+            bankItems: bankItems.map((i) => ({
+              itemId: i.itemId,
+              quantity: i.quantity,
+              slot: i.slot,
+              tabIndex: i.tabIndex,
+            })),
+          };
+        };
+
+        // Collect all agents by characterId (deduped)
+        const agentPromises = new Map<
+          string,
+          Promise<Awaited<ReturnType<typeof buildAgentData>>>
+        >();
+
+        // 1. Embedded agents from AgentManager
+        if (agentManager) {
+          for (const agent of agentManager.getAllAgents()) {
+            agentPromises.set(
+              agent.characterId,
+              buildAgentData(
+                agent.characterId,
+                agent.name,
+                agent.state,
+                agent.startedAt,
+                agent.lastActivity,
+                agent.scriptedRole,
+                agent.error,
+              ),
+            );
+          }
+        }
+
+        // 2. Model agents from ModelAgentSpawner
+        const runningModelAgents = getRunningAgents() as Map<
+          string,
+          {
+            characterId: string;
+            accountId: string;
+            config: { displayName: string };
+          }
+        >;
+        for (const modelAgent of runningModelAgents.values()) {
+          if (!agentPromises.has(modelAgent.characterId)) {
+            agentPromises.set(
+              modelAgent.characterId,
+              buildAgentData(
+                modelAgent.characterId,
+                modelAgent.config.displayName,
+                "running",
+                Date.now(),
+                Date.now(),
+              ),
+            );
+          }
+        }
+
+        const agents = await Promise.all(agentPromises.values());
+
+        return reply.send({
+          timestamp: Date.now(),
+          agentCount: agents.length,
+          agents,
+        });
+      } catch (err) {
+        console.error("[AdminRoutes] Agent monitor error:", err);
+        return reply.code(500).send({ error: "Failed to load agent monitor" });
+      }
+    },
+  );
+
   /** GET /admin/stats - Dashboard statistics */
   fastify.get(
     "/admin/stats",

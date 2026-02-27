@@ -1006,7 +1006,7 @@ export const navigateToAction: Action = {
 
       await service.executeMove({
         target: moveTarget,
-        runMode: false,
+        runMode: true,
       });
 
       await callback?.({ text: responseText, action: "NAVIGATE_TO" });
@@ -1016,7 +1016,11 @@ export const navigateToAction: Action = {
       return {
         success: true,
         text: responseText,
-        data: { action: "NAVIGATE_TO", destination: destinationKey },
+        data: {
+          action: "NAVIGATE_TO",
+          destination: destinationKey,
+          moving: true,
+        },
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);

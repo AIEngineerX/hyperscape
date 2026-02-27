@@ -23,9 +23,11 @@ import {
   getItemName,
 } from "../utils/item-detection.js";
 
-/** Items we never want to deposit — essential tools the agent needs to keep */
+/** Items we never want to deposit — essential tools the agent needs to keep.
+ * Uses specific patterns to avoid false positives (e.g. "swordfish").
+ * Validated against packages/server/world/assets/manifests/ item data. */
 const ESSENTIAL_ITEM_PATTERNS = [
-  "axe",
+  // Gathering tools
   "hatchet",
   "pickaxe",
   "tinderbox",
@@ -33,6 +35,14 @@ const ESSENTIAL_ITEM_PATTERNS = [
   "fishing_net",
   "fishing rod",
   "fishing_rod",
+  "hammer",
+  // Melee weapons (specific enough to not match food like "swordfish")
+  "shortsword",
+  "longsword",
+  "2h sword",
+  "2h_sword",
+  "scimitar",
+  "dagger",
 ];
 
 function isEssentialItem(item: InventoryItem): boolean {
@@ -506,18 +516,45 @@ export const bankDepositAllAction: Action = {
       await service.bankDepositAll();
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      // Withdraw back essential tools that we want to keep
+      // Withdraw back essential tools that we want to keep.
+      // Validated against packages/server/world/assets/manifests/items/.
       const toolsToKeep = [
+        // Gathering tools
         "bronze_hatchet",
         "iron_hatchet",
         "steel_hatchet",
         "mithril_hatchet",
+        "adamant_hatchet",
+        "rune_hatchet",
         "bronze_pickaxe",
         "iron_pickaxe",
         "steel_pickaxe",
         "mithril_pickaxe",
+        "adamant_pickaxe",
+        "rune_pickaxe",
         "tinderbox",
+        "hammer",
         "small_fishing_net",
+        "fishing_rod",
+        "fly_fishing_rod",
+        "harpoon",
+        "lobster_pot",
+        // Melee weapons
+        "bronze_shortsword",
+        "iron_shortsword",
+        "steel_shortsword",
+        "mithril_shortsword",
+        "adamant_shortsword",
+        "rune_shortsword",
+        "bronze_longsword",
+        "iron_longsword",
+        "steel_longsword",
+        "bronze_scimitar",
+        "iron_scimitar",
+        "steel_scimitar",
+        "bronze_dagger",
+        "iron_dagger",
+        "steel_dagger",
       ];
 
       // Only withdraw tools we actually had before depositing

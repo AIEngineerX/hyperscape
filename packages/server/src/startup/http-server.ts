@@ -200,6 +200,7 @@ export async function createHttpServer(
       "X-CSRF-Token", // Allow CSRF token header
       "solana-client", // Required by @solana/web3.js browser RPC requests
       "x-hyperscape-origin-secret",
+      "x-admin-code", // Admin panel authentication
     ],
   });
   console.log(

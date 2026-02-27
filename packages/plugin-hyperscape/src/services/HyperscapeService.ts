@@ -34,6 +34,7 @@ import type {
   ChatMessageCommand,
   GatherResourceCommand,
   QuestData,
+  BankItem,
   PendingDuelChallenge,
   HyperscapeServiceInterface,
   WorldMapData,
@@ -253,6 +254,7 @@ export class HyperscapeService
       worldId: null,
       lastUpdate: Date.now(),
       quests: [],
+      bankItems: [],
     };
 
     this.connectionState = {
@@ -665,6 +667,12 @@ export class HyperscapeService
             body?: string;
             timestamp: number;
           };
+
+          // Ignore system messages — these are game feedback (e.g. "You swing your axe",
+          // "You receive 1x Logs"), not player commands. Processing them wastes LLM calls.
+          if (chatData.from === "System" || !chatData.fromId) {
+            return;
+          }
 
           // Ignore messages from the agent itself
           const agentCharacterId = this.getGameState()?.playerEntity?.id;
@@ -2740,6 +2748,37 @@ Respond with ONLY the action name, nothing else.`;
       }
 
       // ============================================================================
+      // BANK SYSTEM PACKETS
+      // ============================================================================
+
+      case "bankState": {
+        const bankData = data as {
+          items?: Array<{
+            item_id?: string;
+            itemId?: string;
+            name?: string;
+            quantity?: number;
+            slot?: number;
+            tab_index?: number;
+            tabIndex?: number;
+          }>;
+        };
+        if (bankData.items && Array.isArray(bankData.items)) {
+          this.gameState.bankItems = bankData.items.map((item) => ({
+            itemId: item.item_id || item.itemId || "",
+            name: item.name,
+            quantity: item.quantity ?? 1,
+            slot: item.slot,
+            tabIndex: item.tab_index ?? item.tabIndex,
+          }));
+          logger.info(
+            `[HyperscapeService] 🏦 Bank state cached: ${this.gameState.bankItems.length} items`,
+          );
+        }
+        break;
+      }
+
+      // ============================================================================
       // DUEL SYSTEM PACKETS
       // ============================================================================
 
@@ -2978,6 +3017,24 @@ Respond with ONLY the action name, nothing else.`;
    */
   getNearbyEntities(): Entity[] {
     return Array.from(this.gameState.nearbyEntities.values());
+  }
+
+  /**
+   * Get cached bank items (populated when bank is opened)
+   */
+  getBankItems(): BankItem[] {
+    return this.gameState.bankItems;
+  }
+
+  /**
+   * Check if a specific item exists in the bank by name pattern
+   */
+  hasBankItem(namePattern: string): boolean {
+    const pattern = namePattern.toLowerCase();
+    return this.gameState.bankItems.some((item) => {
+      const name = (item.name || item.itemId || "").toLowerCase();
+      return name.includes(pattern);
+    });
   }
 
   /**
@@ -3379,6 +3436,13 @@ Respond with ONLY the action name, nothing else.`;
   async executePickupItem(itemId: string): Promise<void> {
     // Server requires timestamp for anti-replay validation
     this.sendCommand("pickupItem", { itemId, timestamp: Date.now() });
+  }
+
+  /**
+   * Loot all items from a gravestone (corpse loot-all)
+   */
+  async lootGravestone(corpseId: string): Promise<void> {
+    this.sendCommand("corpseLootAll", { corpseId });
   }
 
   /**
@@ -3830,7 +3894,7 @@ Respond with ONLY the action name, nothing else.`;
    * @param content - The thought content (markdown supported)
    */
   syncAgentThought(
-    type: "situation" | "evaluation" | "thinking" | "decision",
+    type: "situation" | "evaluation" | "thinking" | "decision" | "action",
     content: string,
   ): void {
     if (!this.characterId) {
