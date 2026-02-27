@@ -378,13 +378,17 @@ async function launchCaptureBrowser() {
       ];
 
   // Headless mode configuration
-  const headlessArg = STREAM_CAPTURE_HEADLESS_NEW
-    ? "new"
-    : STREAM_CAPTURE_HEADLESS;
+  // Playwright's headless option only accepts boolean
+  // For Chrome's new headless mode (--headless=new), we pass false to Playwright
+  // and add the flag manually to args
+  const playwrightHeadless =
+    STREAM_CAPTURE_HEADLESS && !STREAM_CAPTURE_HEADLESS_NEW;
 
   const launchConfig = {
-    headless: headlessArg,
+    headless: playwrightHeadless,
     args: [
+      // Chrome's new headless mode (if requested) - must be passed as arg, not option
+      ...(STREAM_CAPTURE_HEADLESS_NEW ? ["--headless=new"] : []),
       // GPU / WebGPU essentials
       ...glArgs,
       "--enable-webgl",
