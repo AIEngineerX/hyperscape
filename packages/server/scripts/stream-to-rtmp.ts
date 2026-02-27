@@ -364,11 +364,14 @@ async function launchCaptureBrowser() {
     ? "--enable-features=UseSkiaRenderer"
     : "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
 
-  // Determine GL backend: EGL for headless GPU rendering, ANGLE otherwise
+  // Determine GL backend: Use ANGLE/Vulkan for WebGPU support
+  // Note: --use-gl=egl doesn't support WebGPU, so we always use ANGLE
   const glArgs = STREAM_CAPTURE_USE_EGL
     ? [
-        // EGL mode for headless GPU rendering (works without X server)
-        "--use-gl=egl",
+        // Headless mode with ANGLE/Vulkan for WebGPU
+        // --use-gl=egl doesn't work for WebGPU - must use ANGLE
+        "--use-gl=angle",
+        "--use-angle=vulkan",
         "--ozone-platform=headless",
       ]
     : [
