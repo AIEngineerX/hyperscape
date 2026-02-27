@@ -78,34 +78,79 @@ export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/nvidia_icd.json"
 echo "[deploy] Checking Vulkan support (NVIDIA-only)..."
 vulkaninfo --summary 2>/dev/null || echo "[deploy] WARNING: Vulkan may not be available"
 
-# ── Setup Display Server for GPU Rendering ──
-# We try Xorg first for hardware GPU rendering, then fall back to Xvfb
-echo "[deploy] Setting up display server for GPU rendering..."
+# ── Setup Xorg with NVIDIA GPU (REQUIRED - no software fallback) ──
+# WebGPU requires hardware GPU rendering. Xvfb is software-only and won't work.
+echo "[deploy] ═══════════════════════════════════════════════════════════"
+echo "[deploy] Setting up Xorg with NVIDIA GPU (hardware rendering required)"
+echo "[deploy] ═══════════════════════════════════════════════════════════"
 
 # Kill any existing display servers
 pkill -9 Xvfb 2>/dev/null || true
 pkill -9 Xorg 2>/dev/null || true
 sleep 2
 
-# Default to Xvfb mode (works reliably, but software-only)
-USE_XORG=false
-export DISPLAY=:99
-export DUEL_CAPTURE_USE_XVFB="true"
+# Verify NVIDIA GPU is available
+if ! command -v nvidia-smi &>/dev/null; then
+    echo "[deploy] FATAL: nvidia-smi not found. NVIDIA drivers not installed."
+    exit 1
+fi
 
-# Check if we can use Xorg with NVIDIA
-if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
-    echo "[deploy] NVIDIA GPU detected, attempting Xorg setup..."
+if ! nvidia-smi &>/dev/null; then
+    echo "[deploy] FATAL: nvidia-smi failed. GPU not accessible."
+    nvidia-smi 2>&1 || true
+    exit 1
+fi
 
-    # Install Xorg components if not present
-    apt-get install -y xserver-xorg-core 2>/dev/null || true
+echo "[deploy] NVIDIA GPU detected:"
+nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
 
-    # Create NVIDIA headless Xorg config
-    mkdir -p /etc/X11
-    cat > /etc/X11/xorg-nvidia-headless.conf << 'XORGEOF'
+# Get the NVIDIA driver version for matching packages
+NVIDIA_DRIVER_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | cut -d. -f1)
+echo "[deploy] NVIDIA driver major version: $NVIDIA_DRIVER_VERSION"
+
+# Install Xorg and NVIDIA X driver components
+echo "[deploy] Installing Xorg and NVIDIA X11 driver packages..."
+apt-get update
+apt-get install -y \
+    xserver-xorg-core \
+    xserver-xorg-video-nvidia-${NVIDIA_DRIVER_VERSION} \
+    libnvidia-gl-${NVIDIA_DRIVER_VERSION} \
+    libglvnd0 \
+    libgl1 \
+    libglx0 \
+    libegl1 \
+    libgles2 \
+    mesa-utils \
+    x11-xserver-utils \
+    2>&1 || {
+        echo "[deploy] WARNING: Some packages failed to install, trying fallback..."
+        # Fallback: try without version-specific packages
+        apt-get install -y \
+            xserver-xorg-core \
+            nvidia-driver-${NVIDIA_DRIVER_VERSION} \
+            mesa-utils \
+            x11-xserver-utils \
+            2>&1 || true
+    }
+
+# Create NVIDIA headless Xorg config
+mkdir -p /etc/X11
+cat > /etc/X11/xorg-nvidia-headless.conf << 'XORGEOF'
 # NVIDIA Headless Xorg Configuration for WebGPU Streaming
+# Allows GPU-accelerated rendering without a physical display
+
 Section "ServerLayout"
     Identifier     "Layout0"
     Screen      0  "Screen0"
+EndSection
+
+Section "Files"
+    ModulePath   "/usr/lib/xorg/modules"
+    ModulePath   "/usr/lib/x86_64-linux-gnu/nvidia/xorg"
+EndSection
+
+Section "Module"
+    Load         "glx"
 EndSection
 
 Section "Device"
@@ -114,6 +159,7 @@ Section "Device"
     VendorName     "NVIDIA Corporation"
     Option         "AllowEmptyInitialConfiguration" "True"
     Option         "UseDisplayDevice" "None"
+    Option         "ConnectToAcpid" "False"
 EndSection
 
 Section "Screen"
@@ -122,50 +168,65 @@ Section "Screen"
     DefaultDepth    24
     SubSection     "Display"
         Depth       24
+        Virtual    1920 1080
         Modes      "1920x1080" "1280x720"
     EndSubSection
 EndSection
+
+Section "ServerFlags"
+    Option         "AllowMouseOpenFail" "True"
+    Option         "AutoAddDevices" "False"
+    Option         "AutoEnableDevices" "False"
+EndSection
 XORGEOF
 
-    # Try to start Xorg
-    echo "[deploy] Attempting to start Xorg on :99..."
-    Xorg :99 -config /etc/X11/xorg-nvidia-headless.conf -noreset -logfile /var/log/Xorg.99.log 2>&1 &
-    XORG_PID=$!
-    sleep 5
+# Start Xorg on display :99
+echo "[deploy] Starting Xorg on :99 with NVIDIA GPU..."
+Xorg :99 -config /etc/X11/xorg-nvidia-headless.conf -noreset -logfile /var/log/Xorg.99.log 2>&1 &
+XORG_PID=$!
 
-    # Check if Xorg started successfully
-    if kill -0 $XORG_PID 2>/dev/null; then
-        # Verify X server is actually responding
-        if xdpyinfo -display :99 >/dev/null 2>&1; then
-            echo "[deploy] Xorg :99 started successfully (PID: $XORG_PID)"
-            USE_XORG=true
-            export DUEL_CAPTURE_USE_XVFB="false"
-
-            # Check for GPU rendering capability
-            if glxinfo -display :99 2>/dev/null | grep -q "NVIDIA"; then
-                echo "[deploy] GPU rendering confirmed via Xorg"
-            else
-                echo "[deploy] WARNING: Xorg running but GLX may not work"
-            fi
-        else
-            echo "[deploy] WARNING: Xorg process exists but X server not responding"
-            kill $XORG_PID 2>/dev/null || true
-        fi
-    else
-        echo "[deploy] Xorg failed to start (check /var/log/Xorg.99.log)"
-        cat /var/log/Xorg.99.log 2>/dev/null | tail -20 || true
+# Wait for Xorg to initialize
+for i in {1..10}; do
+    sleep 1
+    if xdpyinfo -display :99 >/dev/null 2>&1; then
+        echo "[deploy] Xorg :99 is responding (attempt $i)"
+        break
     fi
+    echo "[deploy] Waiting for Xorg to start... (attempt $i/10)"
+done
+
+# Verify Xorg started and is functional
+if ! kill -0 $XORG_PID 2>/dev/null; then
+    echo "[deploy] FATAL: Xorg process died. Check /var/log/Xorg.99.log:"
+    cat /var/log/Xorg.99.log 2>/dev/null | tail -50
+    exit 1
 fi
 
-# Fall back to Xvfb if Xorg didn't work
-if [ "$USE_XORG" = "false" ]; then
-    echo "[deploy] Using Xvfb for display (software rendering - WebGPU may not work)"
-    Xvfb :99 -screen 0 1920x1080x24 &
-    sleep 3
-    export DUEL_CAPTURE_USE_XVFB="true"
+if ! xdpyinfo -display :99 >/dev/null 2>&1; then
+    echo "[deploy] FATAL: Xorg process running but X server not responding"
+    echo "[deploy] Xorg log:"
+    cat /var/log/Xorg.99.log 2>/dev/null | tail -50
+    exit 1
 fi
 
-echo "[deploy] Display setup complete: DISPLAY=$DISPLAY, USE_XORG=$USE_XORG, DUEL_CAPTURE_USE_XVFB=$DUEL_CAPTURE_USE_XVFB"
+export DISPLAY=:99
+echo "[deploy] Xorg :99 started successfully (PID: $XORG_PID)"
+
+# Verify GPU rendering works through Xorg
+echo "[deploy] Verifying GPU rendering via GLX..."
+if glxinfo -display :99 2>/dev/null | grep -q "NVIDIA"; then
+    echo "[deploy] ✓ GLX rendering confirmed with NVIDIA GPU"
+    glxinfo -display :99 2>/dev/null | grep -E "OpenGL (vendor|renderer|version)" | head -3
+else
+    echo "[deploy] WARNING: GLX not showing NVIDIA. Checking glxinfo output:"
+    glxinfo -display :99 2>&1 | head -20 || true
+    echo "[deploy] This may cause WebGPU issues but continuing..."
+fi
+
+# No Xvfb fallback - hardware rendering is required
+export DUEL_CAPTURE_USE_XVFB="false"
+echo "[deploy] ✓ Xorg with NVIDIA GPU configured successfully"
+echo "[deploy] DISPLAY=$DISPLAY, DUEL_CAPTURE_USE_XVFB=$DUEL_CAPTURE_USE_XVFB"
 
 # ── Install Chrome Dev channel (has WebGPU enabled by default) ─
 echo "[deploy] Installing Chrome Dev channel for WebGPU support..."
