@@ -139,10 +139,11 @@ RENDERING_MODE="unknown"
 export DISPLAY=""
 export DUEL_CAPTURE_USE_XVFB="false"
 
-# Kill any existing display servers
+# Kill any existing display servers and clean up lock files
 pkill -9 Xvfb 2>/dev/null || true
 pkill -9 Xorg 2>/dev/null || true
 sleep 2
+rm -f /tmp/.X99-lock /tmp/.X0-lock 2>/dev/null || true
 
 # Try Xorg if DRI devices exist
 if [ -d "/dev/dri" ] && [ -e "/dev/dri/card0" -o -e "/dev/dri/card1" ]; then
@@ -195,24 +196,30 @@ XORGEOF
         # If the NVIDIA driver failed, Xorg falls back to modesetting with swrast (software)
         if grep -q "IGLX: Loaded and initialized swrast" /var/log/Xorg.99.log 2>/dev/null; then
             echo "[deploy] ✗ Xorg started but using SOFTWARE RENDERING (swrast) - not usable for WebGPU"
-            echo "[deploy] NVIDIA driver failed to initialize, falling back to headless EGL..."
+            echo "[deploy] NVIDIA driver failed to initialize, will try Xvfb..."
             echo "[deploy] Xorg errors:"
             grep -E "(EE)" /var/log/Xorg.99.log 2>/dev/null | head -10 || true
             pkill -9 Xorg 2>/dev/null || true
+            sleep 2
+            rm -f /tmp/.X99-lock 2>/dev/null || true
         elif grep -q "NVIDIA: Failed to initialize" /var/log/Xorg.99.log 2>/dev/null; then
             echo "[deploy] ✗ Xorg started but NVIDIA driver failed to initialize"
             echo "[deploy] This is common in containers without full DRM access"
-            echo "[deploy] Falling back to headless EGL..."
+            echo "[deploy] Will try Xvfb with Vulkan instead..."
             pkill -9 Xorg 2>/dev/null || true
+            sleep 2
+            rm -f /tmp/.X99-lock 2>/dev/null || true
         else
             export DISPLAY=:99
             RENDERING_MODE="xorg"
             echo "[deploy] ✓ Xorg started successfully on :99 with NVIDIA"
         fi
     else
-        echo "[deploy] Xorg failed to start, will use headless EGL mode"
+        echo "[deploy] Xorg failed to start, will try Xvfb"
         cat /var/log/Xorg.99.log 2>/dev/null | tail -20 || true
         pkill -9 Xorg 2>/dev/null || true
+        sleep 2
+        rm -f /tmp/.X99-lock 2>/dev/null || true
     fi
 else
     echo "[deploy] No DRI devices available (container without DRM access)"
