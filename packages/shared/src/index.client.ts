@@ -248,12 +248,12 @@ export {
   isPhysXReady,
 } from "./physics/PhysXManager";
 
-// Export renderer utilities
+// Export renderer utilities (WebGPU only - no WebGL fallback)
 export {
   createRenderer,
   configureRenderer,
   configureShadowMaps,
-  type UniversalRenderer,
+  type WebGPURenderer,
   type RendererOptions,
 } from "./utils/rendering/RendererFactory";
 

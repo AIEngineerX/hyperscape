@@ -470,12 +470,12 @@ export {
   isPhysXReady,
 } from "./physics/PhysXManager";
 
-// Export renderer utilities
+// Export renderer utilities (WebGPU only - no WebGL fallback)
 export {
   createRenderer,
   configureRenderer,
   configureShadowMaps,
-  type UniversalRenderer,
+  type WebGPURenderer,
   type RendererOptions,
 } from "./utils/rendering/RendererFactory";
 
@@ -1243,11 +1243,7 @@ export {
   type MinimapWorkerOutput,
 } from "./utils/workers/MinimapWorker";
 
-// Renderer capabilities including OffscreenCanvas support
-export {
-  isOffscreenCanvasAvailable,
-  canTransferCanvas,
-} from "./utils/rendering/RendererFactory";
+// WebGPU is REQUIRED - there is no WebGL fallback
 
 // GPU Compute - WebGPU compute shader infrastructure
 export {
