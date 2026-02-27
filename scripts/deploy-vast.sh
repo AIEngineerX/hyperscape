@@ -139,11 +139,18 @@ RENDERING_MODE="unknown"
 export DISPLAY=""
 export DUEL_CAPTURE_USE_XVFB="false"
 
-# Kill any existing display servers and clean up lock files
+# Kill any existing display servers and clean up ALL X files
+echo "[deploy] Cleaning up any existing X servers..."
 pkill -9 Xvfb 2>/dev/null || true
 pkill -9 Xorg 2>/dev/null || true
-sleep 2
-rm -f /tmp/.X99-lock /tmp/.X0-lock 2>/dev/null || true
+pkill -9 X 2>/dev/null || true
+sleep 3
+# Remove ALL X lock files and sockets
+rm -f /tmp/.X*-lock 2>/dev/null || true
+rm -rf /tmp/.X11-unix 2>/dev/null || true
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix
+echo "[deploy] X cleanup complete"
 
 # Try Xorg if DRI devices exist
 if [ -d "/dev/dri" ] && [ -e "/dev/dri/card0" -o -e "/dev/dri/card1" ]; then
@@ -200,15 +207,19 @@ XORGEOF
             echo "[deploy] Xorg errors:"
             grep -E "(EE)" /var/log/Xorg.99.log 2>/dev/null | head -10 || true
             pkill -9 Xorg 2>/dev/null || true
-            sleep 2
-            rm -f /tmp/.X99-lock 2>/dev/null || true
+            pkill -9 X 2>/dev/null || true
+            sleep 3
+            rm -f /tmp/.X*-lock 2>/dev/null || true
+            rm -rf /tmp/.X11-unix/X99 2>/dev/null || true
         elif grep -q "NVIDIA: Failed to initialize" /var/log/Xorg.99.log 2>/dev/null; then
             echo "[deploy] ✗ Xorg started but NVIDIA driver failed to initialize"
             echo "[deploy] This is common in containers without full DRM access"
             echo "[deploy] Will try Xvfb with Vulkan instead..."
             pkill -9 Xorg 2>/dev/null || true
-            sleep 2
-            rm -f /tmp/.X99-lock 2>/dev/null || true
+            pkill -9 X 2>/dev/null || true
+            sleep 3
+            rm -f /tmp/.X*-lock 2>/dev/null || true
+            rm -rf /tmp/.X11-unix/X99 2>/dev/null || true
         else
             export DISPLAY=:99
             RENDERING_MODE="xorg"
@@ -218,8 +229,10 @@ XORGEOF
         echo "[deploy] Xorg failed to start, will try Xvfb"
         cat /var/log/Xorg.99.log 2>/dev/null | tail -20 || true
         pkill -9 Xorg 2>/dev/null || true
-        sleep 2
-        rm -f /tmp/.X99-lock 2>/dev/null || true
+        pkill -9 X 2>/dev/null || true
+        sleep 3
+        rm -f /tmp/.X*-lock 2>/dev/null || true
+        rm -rf /tmp/.X11-unix/X99 2>/dev/null || true
     fi
 else
     echo "[deploy] No DRI devices available (container without DRM access)"
