@@ -418,16 +418,26 @@ echo "[deploy] YOUTUBE_STREAM_KEY: DISABLED"
 
 # ── Ensure GPU environment is set for PM2 ─────────────────────
 # These must be exported so ecosystem.config.cjs and child processes can access them
-export DISPLAY="${DISPLAY:-:99}"
+# Note: DISPLAY, STREAM_CAPTURE_HEADLESS, STREAM_CAPTURE_USE_EGL were set by GPU setup above
+# Don't override them here (they may be empty for headless EGL mode)
 export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/nvidia_icd.json"
-# DUEL_CAPTURE_USE_XVFB was set by the display server setup above
-echo "[deploy] GPU environment: DISPLAY=$DISPLAY, VK_ICD_FILENAMES=$VK_ICD_FILENAMES, DUEL_CAPTURE_USE_XVFB=$DUEL_CAPTURE_USE_XVFB"
+echo "[deploy] GPU environment:"
+echo "[deploy]   DISPLAY=${DISPLAY:-'(empty for headless)'}"
+echo "[deploy]   STREAM_CAPTURE_HEADLESS=${STREAM_CAPTURE_HEADLESS:-false}"
+echo "[deploy]   STREAM_CAPTURE_USE_EGL=${STREAM_CAPTURE_USE_EGL:-false}"
+echo "[deploy]   GPU_RENDERING_MODE=${GPU_RENDERING_MODE:-unknown}"
+echo "[deploy]   VK_ICD_FILENAMES=$VK_ICD_FILENAMES"
+echo "[deploy]   DUEL_CAPTURE_USE_XVFB=$DUEL_CAPTURE_USE_XVFB"
 
-# Verify display is accessible
-if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
-    echo "[deploy] Display $DISPLAY is accessible"
+# Only verify display if we're not in headless mode
+if [ -n "$DISPLAY" ]; then
+    if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+        echo "[deploy] Display $DISPLAY is accessible"
+    else
+        echo "[deploy] WARNING: Display $DISPLAY is not accessible"
+    fi
 else
-    echo "[deploy] WARNING: Display $DISPLAY is not accessible"
+    echo "[deploy] Running in headless mode (no DISPLAY)"
 fi
 
 # ── Start duel stack via pm2 ─────────────────────────────────
