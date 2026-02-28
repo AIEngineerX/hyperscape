@@ -380,6 +380,21 @@ WEBGPU_WORKING="false"
 CHROME_GPU_FLAGS="--no-sandbox --disable-gpu-sandbox --disable-setuid-sandbox --disable-dev-shm-usage"
 CHROME_WEBGPU_FLAGS="--enable-unsafe-webgpu --enable-features=Vulkan,UseSkiaRenderer,WebGPU --ignore-gpu-blocklist --disable-software-rasterizer --disable-gpu-driver-bug-workarounds"
 
+# First, dump chrome://gpu diagnostics to understand GPU status
+echo "[deploy] Capturing chrome://gpu diagnostics..."
+timeout 30 google-chrome-unstable \
+    $CHROME_GPU_FLAGS \
+    --use-gl=angle \
+    --use-angle=vulkan \
+    $CHROME_WEBGPU_FLAGS \
+    --headless=new \
+    --dump-dom \
+    --virtual-time-budget=3000 \
+    "chrome://gpu" 2>&1 | head -100 > /tmp/chrome-gpu-info.txt || true
+echo "[deploy] chrome://gpu output (first 50 lines):"
+head -50 /tmp/chrome-gpu-info.txt 2>/dev/null || echo "[deploy] Could not capture chrome://gpu"
+echo "[deploy] ───────────────────────────────────────────────────────────"
+
 # Test 1: Headless=new with native Vulkan (requires NVIDIA Vulkan ICD)
 echo "[deploy] Test 1: Chrome headless=new with native Vulkan..."
 WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
@@ -458,19 +473,63 @@ if [ "$WEBGPU_WORKING" = "false" ]; then
     fi
 fi
 
-# Test 5: Try with SwANGLE (software Vulkan, last resort)
+# Test 5: Try with VulkanFromANGLE + DefaultANGLEVulkan (explicit Vulkan backend)
 if [ "$WEBGPU_WORKING" = "false" ]; then
-    echo "[deploy] Test 5: Chrome with SwiftShader/SwANGLE (software Vulkan)..."
+    echo "[deploy] Test 5: Chrome with VulkanFromANGLE + passthrough decoder..."
     WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
         $CHROME_GPU_FLAGS \
         --use-gl=angle \
-        --use-angle=swiftshader \
-        $CHROME_WEBGPU_FLAGS \
+        --use-angle=vulkan \
+        --use-cmd-decoder=passthrough \
+        --enable-features=VulkanFromANGLE,DefaultANGLEVulkan,Vulkan,WebGPU \
+        --enable-unsafe-webgpu \
+        --ignore-gpu-blocklist \
+        --enable-dawn-features=allow_unsafe_apis,disable_blob_cache \
         --headless=new \
         --dump-dom \
         --virtual-time-budget=5000 \
         "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
     echo "[deploy] Test 5 Result: $WEBGPU_TEST_RESULT"
+    if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
+        WEBGPU_WORKING="vulkan-passthrough"
+        export STREAM_CAPTURE_ANGLE="vulkan"
+    fi
+fi
+
+# Test 5b: Try non-headless with Xvfb but without ANGLE (native Vulkan)
+if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
+    echo "[deploy] Test 5b: Non-headless Chrome with native Vulkan (no ANGLE)..."
+    WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
+        $CHROME_GPU_FLAGS \
+        --use-vulkan=native \
+        --enable-features=Vulkan,VulkanFromANGLE,WebGPU \
+        --enable-unsafe-webgpu \
+        --ignore-gpu-blocklist \
+        --disable-software-rasterizer \
+        --enable-dawn-features=allow_unsafe_apis \
+        --dump-dom \
+        --virtual-time-budget=5000 \
+        "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
+    echo "[deploy] Test 5b Result: $WEBGPU_TEST_RESULT"
+    if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
+        WEBGPU_WORKING="native-vulkan"
+    fi
+fi
+
+# Test 5c: Try with SwANGLE (software Vulkan, last resort)
+if [ "$WEBGPU_WORKING" = "false" ]; then
+    echo "[deploy] Test 5c: Chrome with SwiftShader/SwANGLE (software Vulkan)..."
+    WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
+        $CHROME_GPU_FLAGS \
+        --use-gl=angle \
+        --use-angle=swiftshader \
+        --enable-unsafe-webgpu \
+        --enable-features=WebGPU \
+        --headless=new \
+        --dump-dom \
+        --virtual-time-budget=5000 \
+        "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
+    echo "[deploy] Test 5c Result: $WEBGPU_TEST_RESULT"
     if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
         WEBGPU_WORKING="swiftshader"
         echo "[deploy] WARNING: Using software rendering (SwiftShader) - performance will be poor!"
