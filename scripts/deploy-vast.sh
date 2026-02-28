@@ -485,11 +485,15 @@ if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     # Create a Node.js test script using Playwright with explicit executable path
     cat > /tmp/playwright-webgpu-test.mjs << 'PLAYWRIGHTEOF'
 import { chromium } from 'playwright';
-// Test with MINIMAL flags first to see if Chrome can even render
+// Test with WebGPU flags added incrementally
+// Known working: --no-sandbox, --disable-dev-shm-usage
 const args = [
-  // Only the absolutely critical flags
   '--no-sandbox',
   '--disable-dev-shm-usage',
+  // Add WebGPU essentials (testing if these cause crash)
+  '--enable-unsafe-webgpu',
+  '--enable-features=WebGPU',
+  '--ignore-gpu-blocklist',
 ];
 
 // Find Chrome Dev executable
