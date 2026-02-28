@@ -406,6 +406,190 @@ async function waitForStreamReadiness(
 
 // ── Browser Launch ─────────────────────────────────────────────────────────
 
+/**
+ * Quick WebGPU preflight test to detect initialization hangs.
+ * Returns true if WebGPU initializes successfully within timeout.
+ */
+async function testWebGpuInit(
+  testPage: Page,
+  timeoutMs: number = 15000,
+): Promise<{ success: boolean; error?: string; adapterInfo?: string }> {
+  console.log(
+    `[Main] Testing WebGPU initialization (timeout: ${timeoutMs}ms)...`,
+  );
+
+  try {
+    const result = await Promise.race([
+      testPage.evaluate(async () => {
+        try {
+          // Check if WebGPU API is available
+          if (!navigator.gpu) {
+            return { success: false, error: "navigator.gpu not available" };
+          }
+
+          // Try to get adapter
+          const adapter = await navigator.gpu.requestAdapter({
+            powerPreference: "high-performance",
+          });
+
+          if (!adapter) {
+            return { success: false, error: "Failed to get WebGPU adapter" };
+          }
+
+          // Try to get device
+          const device = await adapter.requestDevice();
+
+          if (!device) {
+            return { success: false, error: "Failed to get WebGPU device" };
+          }
+
+          // Get adapter info for diagnostics
+          const info = await adapter.requestAdapterInfo();
+          const adapterInfo = `${info.vendor || "unknown"} - ${info.architecture || "unknown"} (${info.description || "no description"})`;
+
+          // Clean up
+          device.destroy();
+
+          return { success: true, adapterInfo };
+        } catch (err) {
+          return {
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }),
+      new Promise<{ success: boolean; error: string }>((resolve) =>
+        setTimeout(
+          () =>
+            resolve({
+              success: false,
+              error: `WebGPU initialization timed out after ${timeoutMs}ms`,
+            }),
+          timeoutMs,
+        ),
+      ),
+    ]);
+
+    if (result.success) {
+      console.log(`[Main] ✅ WebGPU preflight PASSED: ${result.adapterInfo}`);
+    } else {
+      console.warn(`[Main] ⚠️ WebGPU preflight FAILED: ${result.error}`);
+    }
+
+    return result;
+  } catch (err) {
+    const error = errMsg(err);
+    console.warn(`[Main] ⚠️ WebGPU preflight error: ${error}`);
+    return { success: false, error };
+  }
+}
+
+/**
+ * Capture GPU diagnostics from chrome://gpu to help debug WebGPU issues.
+ * This runs a quick Chrome instance to dump GPU info.
+ */
+async function captureGpuDiagnostics(): Promise<void> {
+  console.log("[Main] Capturing GPU diagnostics from chrome://gpu...");
+
+  const launchConfig = {
+    headless: true as const,
+    args: [
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--use-gl=angle",
+      `--use-angle=${ANGLE_BACKEND}`,
+      "--enable-unsafe-webgpu",
+      "--enable-features=Vulkan,UseSkiaRenderer,WebGPU",
+      "--ignore-gpu-blocklist",
+    ],
+  };
+
+  let diagBrowser: Browser | null = null;
+  try {
+    // Try to get the same browser that will be used for streaming
+    if (STREAM_CAPTURE_EXECUTABLE) {
+      diagBrowser = await chromium.launch({
+        ...launchConfig,
+        executablePath: STREAM_CAPTURE_EXECUTABLE,
+      });
+    } else if (STREAM_CAPTURE_CHANNEL) {
+      diagBrowser = await chromium.launch({
+        ...launchConfig,
+        channel: STREAM_CAPTURE_CHANNEL,
+      });
+    } else {
+      diagBrowser = await chromium.launch(launchConfig);
+    }
+
+    const diagPage = await diagBrowser.newPage();
+    await diagPage.goto("chrome://gpu", { timeout: 30000 });
+
+    // Wait for page to load
+    await diagPage.waitForTimeout(2000);
+
+    // Extract key GPU information
+    const gpuInfo = await diagPage.evaluate(() => {
+      const getText = (selector: string) =>
+        document.querySelector(selector)?.textContent?.trim() || "";
+
+      // Get all text content for analysis
+      const bodyText = document.body?.innerText || "";
+
+      // Look for key WebGPU-related strings
+      const hasWebGpu = bodyText.includes("WebGPU");
+      const hasVulkan = bodyText.includes("Vulkan");
+      const hasHardwareAcceleration = bodyText.includes("Hardware accelerated");
+
+      // Try to extract feature status
+      const featureStatusMatch = bodyText.match(
+        /WebGPU[:\s]*(Hardware accelerated|Software only|Disabled|Unavailable|Blocked)/i,
+      );
+
+      return {
+        webgpuStatus: featureStatusMatch
+          ? featureStatusMatch[1]
+          : hasWebGpu
+            ? "Present"
+            : "Not found",
+        hasVulkan,
+        hasHardwareAcceleration,
+        // Get first 3000 chars of text for debugging
+        textPreview: bodyText.slice(0, 3000),
+      };
+    });
+
+    console.log("[GPU Diagnostics] ═══════════════════════════════════════");
+    console.log(`[GPU Diagnostics] WebGPU Status: ${gpuInfo.webgpuStatus}`);
+    console.log(`[GPU Diagnostics] Vulkan Support: ${gpuInfo.hasVulkan}`);
+    console.log(
+      `[GPU Diagnostics] HW Acceleration: ${gpuInfo.hasHardwareAcceleration}`,
+    );
+    console.log("[GPU Diagnostics] ═══════════════════════════════════════");
+
+    // Log detailed info if WebGPU is not hardware accelerated
+    if (
+      gpuInfo.webgpuStatus !== "Hardware accelerated" &&
+      gpuInfo.webgpuStatus !== "Present"
+    ) {
+      console.warn("[GPU Diagnostics] ⚠️ WebGPU may not be working properly!");
+      console.warn(
+        "[GPU Diagnostics] Text preview:",
+        gpuInfo.textPreview.slice(0, 1500),
+      );
+    }
+
+    await diagPage.close();
+    await diagBrowser.close();
+    diagBrowser = null;
+  } catch (err) {
+    console.warn("[GPU Diagnostics] Failed to capture GPU info:", errMsg(err));
+  } finally {
+    if (diagBrowser) {
+      await diagBrowser.close().catch(() => {});
+    }
+  }
+}
+
 async function launchCaptureBrowser() {
   // WebGPU is REQUIRED - configure Chrome for optimal WebGPU support
   const featureFlags = "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
@@ -526,6 +710,10 @@ async function launchCaptureBrowser() {
 async function setupBrowser() {
   if (browser) await cleanup();
 
+  // Capture GPU diagnostics before launching main browser
+  // This helps debug WebGPU issues on remote GPU servers
+  await captureGpuDiagnostics();
+
   const glMode = STREAM_CAPTURE_USE_EGL ? "egl" : `angle/${ANGLE_BACKEND}`;
   const headlessMode = STREAM_CAPTURE_HEADLESS_NEW
     ? "new"
@@ -602,6 +790,29 @@ async function setupBrowser() {
   });
 
   if (!selectedGameUrl) {
+    // First, do a quick WebGPU preflight test on a blank page
+    // This helps detect WebGPU initialization hangs before loading heavy game content
+    console.log("[Main] Running WebGPU preflight test on blank page...");
+    try {
+      await page.goto("about:blank", { timeout: 10000 });
+      const webgpuTest = await testWebGpuInit(page, 20000);
+
+      if (!webgpuTest.success) {
+        console.error("[Main] ❌ WebGPU PREFLIGHT FAILED:", webgpuTest.error);
+        console.error(
+          "[Main] WebGPU is REQUIRED but failed to initialize. Possible causes:",
+        );
+        console.error("  - GPU driver issues or missing Vulkan support");
+        console.error("  - Chrome WebGPU disabled or blocked");
+        console.error("  - Display/Xvfb configuration issues");
+        console.error(
+          "[Main] Will attempt to proceed anyway (game may hang or fail)...",
+        );
+      }
+    } catch (err) {
+      console.warn("[Main] WebGPU preflight test error:", errMsg(err));
+    }
+
     for (const candidateUrl of GAME_URL_CANDIDATES) {
       console.log(`[Main] Navigating to ${candidateUrl}...`);
       try {
