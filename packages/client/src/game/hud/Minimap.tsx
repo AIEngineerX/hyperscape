@@ -13,7 +13,7 @@ import React, {
 } from "react";
 import { useThemeStore, useQuestSelectionStore } from "@/ui";
 import { Entity, EventType, THREE, createRenderer } from "@hyperscape/shared";
-import type { UniversalRenderer } from "@hyperscape/shared";
+import type { WebGPURenderer } from "@hyperscape/shared";
 import type { ClientWorld } from "../../types";
 import { ThreeResourceManager } from "../../lib/ThreeResourceManager";
 
@@ -416,7 +416,7 @@ export function Minimap({
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
-  const rendererRef = useRef<UniversalRenderer | null>(null);
+  const rendererRef = useRef<WebGPURenderer | null>(null);
   const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const [entityPips, setEntityPips] = useState<EntityPip[]>([]);
