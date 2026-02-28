@@ -73,10 +73,41 @@ echo "[deploy] Checking GPU status..."
 nvidia-smi || echo "[deploy] WARNING: nvidia-smi not available"
 
 # Force NVIDIA-only Vulkan ICD to avoid conflicts with Mesa ICDs
-export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/nvidia_icd.json"
+# Check which ICD files exist and use the first available one
+echo "[deploy] Checking Vulkan ICD files..."
+NVIDIA_ICD_PATHS=(
+    "/usr/share/vulkan/icd.d/nvidia_icd.json"
+    "/etc/vulkan/icd.d/nvidia_icd.json"
+    "/usr/share/vulkan/icd.d/nvidia_layers.json"
+)
+for icd_path in "${NVIDIA_ICD_PATHS[@]}"; do
+    if [ -f "$icd_path" ]; then
+        echo "[deploy] ✓ Found NVIDIA ICD at: $icd_path"
+        export VK_ICD_FILENAMES="$icd_path"
+        cat "$icd_path" 2>/dev/null | head -20 || true
+        break
+    else
+        echo "[deploy] ✗ Not found: $icd_path"
+    fi
+done
+
+if [ -z "$VK_ICD_FILENAMES" ]; then
+    echo "[deploy] WARNING: No NVIDIA Vulkan ICD file found!"
+    echo "[deploy] Looking for any Vulkan ICD files..."
+    ls -la /usr/share/vulkan/icd.d/ 2>/dev/null || true
+    ls -la /etc/vulkan/icd.d/ 2>/dev/null || true
+    # Try to use any available ICD as fallback
+    export VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/nvidia_icd.json"
+fi
+
+echo "[deploy] Using VK_ICD_FILENAMES=$VK_ICD_FILENAMES"
 
 echo "[deploy] Checking Vulkan support (NVIDIA-only)..."
-vulkaninfo --summary 2>/dev/null || echo "[deploy] WARNING: Vulkan may not be available"
+vulkaninfo --summary 2>&1 | head -30 || echo "[deploy] WARNING: vulkaninfo failed"
+
+# Also check if libvulkan can find the driver
+echo "[deploy] Checking Vulkan driver loading..."
+VK_LOADER_DEBUG=all vulkaninfo --summary 2>&1 | grep -E "ICD|driver|device" | head -10 || true
 
 # ── Setup GPU Rendering for WebGPU ──
 # WebGPU is REQUIRED - there is NO WebGL fallback.
@@ -301,6 +332,79 @@ if ! command -v google-chrome-unstable &> /dev/null; then
     echo "[deploy] Chrome Dev installed: $(google-chrome-unstable --version 2>/dev/null || echo 'install failed')"
 else
     echo "[deploy] Chrome Dev already installed: $(google-chrome-unstable --version)"
+fi
+
+# ── Test WebGPU is actually working ───────────────────────────
+echo "[deploy] ═══════════════════════════════════════════════════════════"
+echo "[deploy] Testing WebGPU before starting services..."
+echo "[deploy] ═══════════════════════════════════════════════════════════"
+
+# Create a simple WebGPU test HTML file
+cat > /tmp/webgpu-test.html << 'WEBGPUHTML'
+<!DOCTYPE html>
+<html><body>
+<script>
+(async () => {
+  try {
+    if (!navigator.gpu) {
+      console.log('WEBGPU_RESULT: FAILED - navigator.gpu not available');
+      return;
+    }
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) {
+      console.log('WEBGPU_RESULT: FAILED - No adapter');
+      return;
+    }
+    const info = await adapter.requestAdapterInfo();
+    console.log('WEBGPU_RESULT: SUCCESS - Adapter: ' + (info.vendor || 'unknown') + ' ' + (info.description || ''));
+  } catch (e) {
+    console.log('WEBGPU_RESULT: FAILED - ' + e.message);
+  }
+})();
+</script>
+</body></html>
+WEBGPUHTML
+
+# Run Chrome to test WebGPU (with timeout)
+echo "[deploy] Running WebGPU test in Chrome (timeout: 30s)..."
+WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
+    --no-sandbox \
+    --disable-dev-shm-usage \
+    --use-gl=angle \
+    --use-angle=vulkan \
+    --enable-unsafe-webgpu \
+    --enable-features=Vulkan,UseSkiaRenderer,WebGPU \
+    --ignore-gpu-blocklist \
+    --disable-software-rasterizer \
+    --disable-gpu-driver-bug-workarounds \
+    --headless=new \
+    --dump-dom \
+    --virtual-time-budget=5000 \
+    "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
+
+echo "[deploy] WebGPU Test: $WEBGPU_TEST_RESULT"
+
+# Log detailed GPU info from Chrome
+echo "[deploy] Getting Chrome GPU info..."
+timeout 30 google-chrome-unstable \
+    --no-sandbox \
+    --disable-dev-shm-usage \
+    --use-gl=angle \
+    --use-angle=vulkan \
+    --enable-unsafe-webgpu \
+    --enable-features=Vulkan,UseSkiaRenderer,WebGPU \
+    --ignore-gpu-blocklist \
+    --headless=new \
+    --dump-dom \
+    --virtual-time-budget=5000 \
+    "chrome://gpu" 2>&1 | grep -E "WebGPU|Vulkan|GL_RENDERER|GPU0|Hardware" | head -20 || true
+
+if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
+    echo "[deploy] ✓ WebGPU test PASSED"
+else
+    echo "[deploy] ⚠️ WebGPU test did not confirm success"
+    echo "[deploy] This may indicate WebGPU issues, but proceeding anyway..."
+    echo "[deploy] The rtmp-bridge has its own WebGPU preflight check."
 fi
 
 # ── Setup PulseAudio for audio capture ────────────────────────
