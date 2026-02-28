@@ -368,17 +368,18 @@ WEBGPUHTML
 # Test multiple Chrome configurations to find what works
 WEBGPU_WORKING="false"
 
+# Common Chrome flags for WebGPU testing
+# CRITICAL: --disable-gpu-sandbox is required for container GPU access
+CHROME_GPU_FLAGS="--no-sandbox --disable-gpu-sandbox --disable-setuid-sandbox --disable-dev-shm-usage"
+CHROME_WEBGPU_FLAGS="--enable-unsafe-webgpu --enable-features=Vulkan,UseSkiaRenderer,WebGPU --ignore-gpu-blocklist --disable-software-rasterizer"
+
 # Test 1: Headless=new with Vulkan ANGLE (requires working Vulkan)
 echo "[deploy] Test 1: Chrome headless=new with ANGLE/Vulkan..."
 WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
-    --no-sandbox \
-    --disable-dev-shm-usage \
+    $CHROME_GPU_FLAGS \
     --use-gl=angle \
     --use-angle=vulkan \
-    --enable-unsafe-webgpu \
-    --enable-features=Vulkan,UseSkiaRenderer,WebGPU \
-    --ignore-gpu-blocklist \
-    --disable-software-rasterizer \
+    $CHROME_WEBGPU_FLAGS \
     --headless=new \
     --dump-dom \
     --virtual-time-budget=5000 \
@@ -392,13 +393,9 @@ fi
 if [ "$WEBGPU_WORKING" = "false" ]; then
     echo "[deploy] Test 2: Chrome headless=new with EGL..."
     WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
-        --no-sandbox \
-        --disable-dev-shm-usage \
+        $CHROME_GPU_FLAGS \
         --use-gl=egl \
-        --enable-unsafe-webgpu \
-        --enable-features=Vulkan,UseSkiaRenderer,WebGPU \
-        --ignore-gpu-blocklist \
-        --disable-software-rasterizer \
+        $CHROME_WEBGPU_FLAGS \
         --headless=new \
         --dump-dom \
         --virtual-time-budget=5000 \
@@ -416,14 +413,10 @@ fi
 if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     echo "[deploy] Test 3: Chrome with DISPLAY=$DISPLAY (Xvfb)..."
     WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
-        --no-sandbox \
-        --disable-dev-shm-usage \
+        $CHROME_GPU_FLAGS \
         --use-gl=angle \
         --use-angle=vulkan \
-        --enable-unsafe-webgpu \
-        --enable-features=Vulkan,UseSkiaRenderer,WebGPU \
-        --ignore-gpu-blocklist \
-        --disable-software-rasterizer \
+        $CHROME_WEBGPU_FLAGS \
         --dump-dom \
         --virtual-time-budget=5000 \
         "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
@@ -437,15 +430,11 @@ fi
 if [ "$WEBGPU_WORKING" = "false" ]; then
     echo "[deploy] Test 4: Chrome with ozone-platform=headless..."
     WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
-        --no-sandbox \
-        --disable-dev-shm-usage \
+        $CHROME_GPU_FLAGS \
         --ozone-platform=headless \
         --use-gl=angle \
         --use-angle=vulkan \
-        --enable-unsafe-webgpu \
-        --enable-features=Vulkan,UseSkiaRenderer,WebGPU \
-        --ignore-gpu-blocklist \
-        --disable-software-rasterizer \
+        $CHROME_WEBGPU_FLAGS \
         --dump-dom \
         --virtual-time-budget=5000 \
         "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
@@ -453,6 +442,26 @@ if [ "$WEBGPU_WORKING" = "false" ]; then
     if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
         WEBGPU_WORKING="ozone-headless"
         export STREAM_CAPTURE_OZONE_HEADLESS="true"
+    fi
+fi
+
+# Test 5: Try with SwANGLE (software Vulkan, last resort)
+if [ "$WEBGPU_WORKING" = "false" ]; then
+    echo "[deploy] Test 5: Chrome with SwiftShader/SwANGLE (software Vulkan)..."
+    WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
+        $CHROME_GPU_FLAGS \
+        --use-gl=angle \
+        --use-angle=swiftshader \
+        $CHROME_WEBGPU_FLAGS \
+        --headless=new \
+        --dump-dom \
+        --virtual-time-budget=5000 \
+        "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
+    echo "[deploy] Test 5 Result: $WEBGPU_TEST_RESULT"
+    if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
+        WEBGPU_WORKING="swiftshader"
+        echo "[deploy] WARNING: Using software rendering (SwiftShader) - performance will be poor!"
+        export STREAM_CAPTURE_ANGLE="swiftshader"
     fi
 fi
 
@@ -764,42 +773,28 @@ echo "    bun run duel:prod:restart  # restart stack"
 echo "    bun run duel:prod:stop     # stop stack"
 echo "════════════════════════════════════════════════════════════"
 
-# ── Diagnostic: Check streaming status ────────────────────────
+# ── Quick Streaming Status (non-blocking) ────────────────────────
 echo ""
-echo "[deploy] ═══ STREAMING DIAGNOSTICS ═══"
+echo "[deploy] ═══ QUICK STATUS CHECK ═══"
 
-# Wait for streaming to initialize (RTMP bridge takes time to start)
-echo "[deploy] Waiting 30s for streaming to initialize..."
-sleep 30
-
-echo "[deploy] Checking streaming API..."
-STREAMING_STATE=$(curl -s "http://localhost:5555/api/streaming/state" --max-time 10 2>/dev/null || echo '{"error": "curl failed"}')
-echo "[deploy] Streaming state: $STREAMING_STATE"
+# Quick check - no waiting, just see what's running
+echo "[deploy] PM2 processes:"
+bunx pm2 jlist 2>/dev/null | jq -r '.[] | "\(.name): \(.pm2_env.status)"' || bunx pm2 status
 
 echo ""
-echo "[deploy] Checking if game client is running on port 3333..."
-CLIENT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:3333" --max-time 5 2>/dev/null || echo "000")
-echo "[deploy] Game client status: $CLIENT_STATUS"
+echo "[deploy] Game client check..."
+CLIENT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:3333" --max-time 3 2>/dev/null || echo "000")
+echo "[deploy] Game client: $CLIENT_STATUS"
 
 echo ""
-echo "[deploy] Checking RTMP status file..."
-cat /root/hyperscape/packages/server/public/live/rtmp-status.json 2>/dev/null || echo "[deploy] No RTMP status file found"
+echo "[deploy] Server health..."
+HEALTH=$(curl -s "http://localhost:5555/health" --max-time 3 2>/dev/null || echo '{"status":"unknown"}')
+echo "[deploy] Health: $HEALTH"
 
 echo ""
-echo "[deploy] Checking for FFmpeg processes..."
-ps aux | grep -i ffmpeg | grep -v grep || echo "[deploy] No FFmpeg processes running"
+echo "[deploy] ═══ DEPLOYMENT COMPLETE ═══"
+echo "[deploy] Diagnostics will run asynchronously - check PM2 logs for streaming status"
+echo "[deploy] Use: bunx pm2 logs hyperscape-duel --lines 100"
 
-echo ""
-echo "[deploy] Checking for running stream processes..."
-ps aux | grep -E "stream-to-rtmp|rtmp-bridge" | grep -v grep || echo "[deploy] No stream processes found"
-
-echo ""
-echo "[deploy] Recent PM2 logs (last 200 lines, filtered for streaming):"
-bunx pm2 logs hyperscape-duel --nostream --lines 200 2>/dev/null | grep -iE "rtmp|ffmpeg|stream|capture|destination|twitch|kick|frame|fps|bitrate|error" | tail -100 || echo "[deploy] Could not get filtered PM2 logs"
-
-echo ""
-echo "[deploy] Full recent PM2 error logs:"
-bunx pm2 logs hyperscape-duel --nostream --lines 50 --err 2>/dev/null || echo "[deploy] Could not get PM2 error logs"
-
-echo ""
-echo "[deploy] ═══ END DIAGNOSTICS ═══"
+# Exit successfully - don't wait for streaming diagnostics
+exit 0

@@ -659,8 +659,10 @@ async function launchCaptureBrowser() {
       "--enable-accelerated-2d-canvas",
       "--enable-gpu-compositing",
       "--enable-native-gpu-memory-buffers",
-      // Sandbox & stability
+      // Sandbox & stability - CRITICAL: disable GPU sandbox for container GPU access
       "--no-sandbox",
+      "--disable-gpu-sandbox",
+      "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-web-security",
       "--autoplay-policy=no-user-gesture-required",
