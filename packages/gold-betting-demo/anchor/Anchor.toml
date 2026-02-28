@@ -24,7 +24,9 @@ gold_perps_market = "HbXhqEFevpkfYdZCN6YmJGRmQmj9vsBun2ZHjeeaLRik"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+# Use localnet for testing (anchor test spins up a local validator)
+# For devnet/mainnet deployments, use: anchor deploy --provider.cluster devnet
+cluster = "localnet"
 wallet = "~/.config/solana/hyperscape-keys/deployer.json"
 
 [workspace]
