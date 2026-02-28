@@ -1638,7 +1638,7 @@ export class DuelOrchestrator {
 
       this.setAgentCombatTarget(agent1Id, agent2Id);
       this.setAgentCombatTarget(agent2Id, agent1Id);
-    }, 1500);
+    }, 3000); // 5 ticks at 600ms - aligned with combat loop re-engagement interval
   }
 
   getTileChebyshevDistance(

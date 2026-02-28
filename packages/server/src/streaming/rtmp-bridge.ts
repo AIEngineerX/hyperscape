@@ -126,11 +126,11 @@ export class RTMPBridge {
   /** Maximum delay between restart attempts (ms) */
   private static readonly MAX_RESTART_DELAY = 60000;
 
-  /** Health check interval (ms) */
-  private static readonly HEALTH_CHECK_INTERVAL = 10000;
+  /** Health check interval (ms) - check every 5s for faster detection */
+  private static readonly HEALTH_CHECK_INTERVAL = 5000;
 
-  /** Timeout for no data before considering unhealthy (ms) */
-  private static readonly DATA_TIMEOUT = 30000;
+  /** Timeout for no data before considering unhealthy (ms) - reduced to 15s */
+  private static readonly DATA_TIMEOUT = 15000;
   /** Number of FFmpeg log lines to keep in memory */
   private static readonly FFMPEG_LOG_TAIL_LINES = 40;
 
@@ -614,8 +614,9 @@ export class RTMPBridge {
       process.env.STREAM_LOW_LATENCY || "",
     );
     const tune = useLowLatency ? "zerolatency" : "film";
-    // Increase buffer multiplier for stability (4x vs 2x for low latency)
-    const bufferMultiplier = useLowLatency ? 2 : 4;
+    // Buffer multiplier: 2x for both modes (was 4x for film, caused 18MB buffer)
+    // Lower buffer reduces latency accumulation and backpressure buildup
+    const bufferMultiplier = 2;
 
     return [
       "-c:v",

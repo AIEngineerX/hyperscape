@@ -254,6 +254,13 @@ export class AutonomousBehaviorManager {
   /** Request a fast follow-up tick (2s instead of normal interval) */
   private nextTickFast = false;
 
+  /** LLM rate limiting - exponential backoff on consecutive failures */
+  private llmConsecutiveFailures = 0;
+  private llmLastFailureAt = 0;
+  private readonly LLM_MAX_CONSECUTIVE_FAILURES = 5;
+  private readonly LLM_BASE_BACKOFF_MS = 5000; // 5 second base backoff
+  private readonly LLM_MAX_BACKOFF_MS = 60000; // 60 second max backoff
+
   constructor(runtime: IAgentRuntime, config?: AutonomousBehaviorConfig) {
     this.runtime = runtime;
     this.tickInterval = Math.max(
@@ -626,9 +633,24 @@ export class AutonomousBehaviorManager {
 
       try {
         await this.tick();
+        // Reset LLM failure counter on successful tick
+        if (this.llmConsecutiveFailures > 0) {
+          this.llmConsecutiveFailures = 0;
+          logger.info(
+            "[AutonomousBehavior] LLM rate limit cleared after successful tick",
+          );
+        }
       } catch (error) {
+        // Track consecutive failures for LLM rate limiting
+        this.llmConsecutiveFailures++;
+        this.llmLastFailureAt = Date.now();
+        const backoffMs = Math.min(
+          this.LLM_BASE_BACKOFF_MS *
+            Math.pow(2, this.llmConsecutiveFailures - 1),
+          this.LLM_MAX_BACKOFF_MS,
+        );
         logger.error(
-          "[AutonomousBehavior] Error in tick:",
+          `[AutonomousBehavior] Error in tick (failure ${this.llmConsecutiveFailures}, backoff ${Math.round(backoffMs / 1000)}s):`,
           error instanceof Error ? error.message : String(error),
         );
       }
@@ -686,6 +708,21 @@ export class AutonomousBehaviorManager {
       );
       this.actionLock = null;
       this.nextTickFast = true; // Quick follow-up after movement completes
+    }
+
+    // LLM rate limiting - exponential backoff on consecutive failures
+    if (this.llmConsecutiveFailures > 0) {
+      const backoffMs = Math.min(
+        this.LLM_BASE_BACKOFF_MS * Math.pow(2, this.llmConsecutiveFailures - 1),
+        this.LLM_MAX_BACKOFF_MS,
+      );
+      const timeSinceFailure = Date.now() - this.llmLastFailureAt;
+      if (timeSinceFailure < backoffMs) {
+        logger.debug(
+          `[AutonomousBehavior] LLM rate limited: ${this.llmConsecutiveFailures} failures, waiting ${Math.round((backoffMs - timeSinceFailure) / 1000)}s more`,
+        );
+        return;
+      }
     }
 
     // Pre-save current goal if inventory is near-full (banking may be triggered)

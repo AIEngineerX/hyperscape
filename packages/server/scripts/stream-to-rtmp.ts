@@ -187,6 +187,8 @@ let cdpDroppedFrames = 0;
 let cdpLastFrameWidth = 0;
 let cdpLastFrameHeight = 0;
 let cdpResolutionMismatchCount = 0;
+/** Flag to suppress old CDP handlers during recovery */
+let cdpRecoveryModeActive = false;
 
 function startFpsTracking() {
   if (cdpFpsIntervalId) clearInterval(cdpFpsIntervalId);
@@ -925,6 +927,9 @@ async function startCdpCapture(bridge: ReturnType<typeof getRTMPBridge>) {
 
   // Handle incoming frames from CDP
   cdpSession.on("Page.screencastFrame", async (params) => {
+    // Skip if we're in recovery mode (old session handler may still fire briefly)
+    if (cdpRecoveryModeActive) return;
+
     const { sessionId, data: base64Data, metadata } = params;
 
     // Track frame dimensions from CDP metadata
@@ -1407,6 +1412,8 @@ async function main() {
         let recovered = false;
         try {
           // Soft recovery: restart CDP screencast without killing browser or FFmpeg
+          // Set recovery mode to suppress old handler's frames during transition
+          cdpRecoveryModeActive = true;
           await withTimeout(
             (async () => {
               if (cdpSession) {
@@ -1426,6 +1433,9 @@ async function main() {
                   }
                   cdpSession = null;
                 }
+                // Small delay to ensure old session is fully cleaned up
+                await new Promise((r) => setTimeout(r, 100));
+
                 cdpSession = await page.context().newCDPSession(page);
                 await cdpSession.send("Page.startScreencast", {
                   format: "jpeg",
@@ -1435,6 +1445,9 @@ async function main() {
                   everyNthFrame: 1,
                 });
                 cdpSession.on("Page.screencastFrame", async (params) => {
+                  // Skip if we're still in recovery mode transition
+                  if (cdpRecoveryModeActive) return;
+
                   const { sessionId, data: base64Data, metadata } = params;
                   // Track frame dimensions after recovery
                   if (metadata?.deviceWidth && metadata?.deviceHeight) {
@@ -1453,6 +1466,8 @@ async function main() {
                   if (written) cdpFrameCount++;
                   else cdpDroppedFrames++;
                 });
+                // Clear recovery mode after new handler is set up
+                cdpRecoveryModeActive = false;
               } else {
                 throw new Error("Page is closed, need hard recovery");
               }
@@ -1494,6 +1509,8 @@ async function main() {
           }
         } finally {
           cdpRecoveryInFlight = false;
+          // Always clear recovery mode to allow frame processing
+          cdpRecoveryModeActive = false;
         }
 
         if (
