@@ -490,10 +490,23 @@ async function testWebGpuInit(
  */
 async function captureGpuDiagnostics(): Promise<void> {
   console.log("[Main] Capturing GPU diagnostics from chrome://gpu...");
+  console.log(
+    `[Main] Environment: DISPLAY=${process.env.DISPLAY}, ANGLE=${ANGLE_BACKEND}`,
+  );
+  console.log(
+    `[Main] VK_ICD_FILENAMES=${process.env.VK_ICD_FILENAMES || "(not set)"}`,
+  );
+
+  // Use same headless setting as main browser - WebGPU REQUIRES a display
+  // headless: true does NOT support WebGPU
+  const playwrightHeadless =
+    STREAM_CAPTURE_HEADLESS && !STREAM_CAPTURE_HEADLESS_NEW;
 
   const launchConfig = {
-    headless: true as const,
+    headless: playwrightHeadless,
+    ignoreDefaultArgs: ["--enable-unsafe-swiftshader"],
     args: [
+      ...(STREAM_CAPTURE_HEADLESS_NEW ? ["--headless=new"] : []),
       "--no-sandbox",
       "--disable-dev-shm-usage",
       "--use-gl=angle",
@@ -501,7 +514,15 @@ async function captureGpuDiagnostics(): Promise<void> {
       "--enable-unsafe-webgpu",
       "--enable-features=Vulkan,UseSkiaRenderer,WebGPU",
       "--ignore-gpu-blocklist",
+      "--disable-software-rasterizer",
     ],
+    env: {
+      ...process.env,
+      // Ensure Vulkan ICD is explicitly set
+      VK_ICD_FILENAMES:
+        process.env.VK_ICD_FILENAMES ||
+        "/usr/share/vulkan/icd.d/nvidia_icd.json",
+    },
   };
 
   let diagBrowser: Browser | null = null;
