@@ -340,25 +340,32 @@ echo "[deploy] Testing WebGPU before starting services..."
 echo "[deploy] ═══════════════════════════════════════════════════════════"
 
 # Create a simple WebGPU test HTML file
+# Output result to DOM for --dump-dom capture, and also to console for debugging
 cat > /tmp/webgpu-test.html << 'WEBGPUHTML'
 <!DOCTYPE html>
 <html><body>
+<div id="result">WEBGPU_RESULT: PENDING</div>
 <script>
 (async () => {
+  const resultEl = document.getElementById('result');
   try {
     if (!navigator.gpu) {
-      console.log('WEBGPU_RESULT: FAILED - navigator.gpu not available');
+      resultEl.textContent = 'WEBGPU_RESULT: FAILED - navigator.gpu not available';
+      console.log(resultEl.textContent);
       return;
     }
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) {
-      console.log('WEBGPU_RESULT: FAILED - No adapter');
+      resultEl.textContent = 'WEBGPU_RESULT: FAILED - No adapter';
+      console.log(resultEl.textContent);
       return;
     }
     const info = await adapter.requestAdapterInfo();
-    console.log('WEBGPU_RESULT: SUCCESS - Adapter: ' + (info.vendor || 'unknown') + ' ' + (info.description || ''));
+    resultEl.textContent = 'WEBGPU_RESULT: SUCCESS - Adapter: ' + (info.vendor || 'unknown') + ' ' + (info.description || '');
+    console.log(resultEl.textContent);
   } catch (e) {
-    console.log('WEBGPU_RESULT: FAILED - ' + e.message);
+    resultEl.textContent = 'WEBGPU_RESULT: FAILED - ' + e.message;
+    console.log(resultEl.textContent);
   }
 })();
 </script>
@@ -468,6 +475,47 @@ if [ "$WEBGPU_WORKING" = "false" ]; then
         WEBGPU_WORKING="swiftshader"
         echo "[deploy] WARNING: Using software rendering (SwiftShader) - performance will be poor!"
         export STREAM_CAPTURE_ANGLE="swiftshader"
+    fi
+fi
+
+# Test 6: Use Playwright in non-headless mode with Xvfb (most accurate test)
+if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
+    echo "[deploy] Test 6: Playwright non-headless with Xvfb (actual streaming config)..."
+
+    # Create a Node.js test script using Playwright
+    cat > /tmp/playwright-webgpu-test.mjs << 'PLAYWRIGHTEOF'
+import { chromium } from 'playwright';
+const args = [
+  '--no-sandbox', '--disable-gpu-sandbox', '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage', '--use-vulkan', '--use-gl=angle', '--use-angle=vulkan',
+  '--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,WebGPU',
+  '--ignore-gpu-blocklist', '--disable-software-rasterizer',
+  '--disable-gpu-driver-bug-workarounds'
+];
+try {
+  const browser = await chromium.launch({
+    headless: false,  // Non-headless for WebGPU
+    args,
+    channel: 'chrome-dev'
+  });
+  const page = await browser.newPage();
+  await page.goto('file:///tmp/webgpu-test.html', { timeout: 30000 });
+  await page.waitForTimeout(3000);
+  const result = await page.evaluate(() => document.getElementById('result')?.textContent || 'WEBGPU_RESULT: FAILED - no result element');
+  console.log(result);
+  await browser.close();
+  process.exit(result.includes('SUCCESS') ? 0 : 1);
+} catch (e) {
+  console.log('WEBGPU_RESULT: FAILED - ' + e.message);
+  process.exit(1);
+}
+PLAYWRIGHTEOF
+
+    WEBGPU_TEST_RESULT=$(timeout 60 node /tmp/playwright-webgpu-test.mjs 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
+    echo "[deploy] Test 6 Result: $WEBGPU_TEST_RESULT"
+    if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
+        WEBGPU_WORKING="playwright-xvfb"
+        echo "[deploy] ✓ WebGPU works with Playwright non-headless + Xvfb"
     fi
 fi
 
