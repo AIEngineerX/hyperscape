@@ -129,6 +129,9 @@ const STREAM_CAPTURE_EXECUTABLE =
   process.env.STREAM_CAPTURE_EXECUTABLE?.trim() || "";
 const STREAM_CAPTURE_USE_EGL =
   process.env.STREAM_CAPTURE_USE_EGL?.toLowerCase() === "true";
+// Use ozone-platform=headless for headless GPU rendering (works without X11)
+const STREAM_CAPTURE_OZONE_HEADLESS =
+  process.env.STREAM_CAPTURE_OZONE_HEADLESS?.toLowerCase() === "true";
 const ANGLE_BACKEND =
   process.env.STREAM_CAPTURE_ANGLE?.trim() ||
   (process.platform === "darwin" ? "metal" : "vulkan");
@@ -630,11 +633,18 @@ async function launchCaptureBrowser() {
     );
   }
 
+  // Ozone platform for headless GPU rendering (works without X11)
+  const ozoneArgs = STREAM_CAPTURE_OZONE_HEADLESS
+    ? ["--ozone-platform=headless"]
+    : [];
+
   const launchConfig = {
     headless: playwrightHeadless,
     // Ignore Playwright's SwiftShader default which conflicts with GPU rendering
     ignoreDefaultArgs: ["--enable-unsafe-swiftshader"],
     args: [
+      // Ozone headless platform (if set) - enables GPU without X11
+      ...ozoneArgs,
       // Chrome's new headless mode (if requested) - must be passed as arg, not option
       ...(STREAM_CAPTURE_HEADLESS_NEW ? ["--headless=new"] : []),
       // GPU / WebGPU essentials - WebGPU is REQUIRED

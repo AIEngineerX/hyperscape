@@ -334,7 +334,7 @@ else
     echo "[deploy] Chrome Dev already installed: $(google-chrome-unstable --version)"
 fi
 
-# ── Test WebGPU is actually working ───────────────────────────
+# ── Test WebGPU with different configurations ───────────────────────────
 echo "[deploy] ═══════════════════════════════════════════════════════════"
 echo "[deploy] Testing WebGPU before starting services..."
 echo "[deploy] ═══════════════════════════════════════════════════════════"
@@ -365,8 +365,11 @@ cat > /tmp/webgpu-test.html << 'WEBGPUHTML'
 </body></html>
 WEBGPUHTML
 
-# Run Chrome to test WebGPU (with timeout)
-echo "[deploy] Running WebGPU test in Chrome (timeout: 30s)..."
+# Test multiple Chrome configurations to find what works
+WEBGPU_WORKING="false"
+
+# Test 1: Headless=new with Vulkan ANGLE (requires working Vulkan)
+echo "[deploy] Test 1: Chrome headless=new with ANGLE/Vulkan..."
 WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
     --no-sandbox \
     --disable-dev-shm-usage \
@@ -376,36 +379,94 @@ WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
     --enable-features=Vulkan,UseSkiaRenderer,WebGPU \
     --ignore-gpu-blocklist \
     --disable-software-rasterizer \
-    --disable-gpu-driver-bug-workarounds \
     --headless=new \
     --dump-dom \
     --virtual-time-budget=5000 \
     "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
-
-echo "[deploy] WebGPU Test: $WEBGPU_TEST_RESULT"
-
-# Log detailed GPU info from Chrome
-echo "[deploy] Getting Chrome GPU info..."
-timeout 30 google-chrome-unstable \
-    --no-sandbox \
-    --disable-dev-shm-usage \
-    --use-gl=angle \
-    --use-angle=vulkan \
-    --enable-unsafe-webgpu \
-    --enable-features=Vulkan,UseSkiaRenderer,WebGPU \
-    --ignore-gpu-blocklist \
-    --headless=new \
-    --dump-dom \
-    --virtual-time-budget=5000 \
-    "chrome://gpu" 2>&1 | grep -E "WebGPU|Vulkan|GL_RENDERER|GPU0|Hardware" | head -20 || true
-
+echo "[deploy] Test 1 Result: $WEBGPU_TEST_RESULT"
 if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
-    echo "[deploy] ✓ WebGPU test PASSED"
-else
-    echo "[deploy] ⚠️ WebGPU test did not confirm success"
-    echo "[deploy] This may indicate WebGPU issues, but proceeding anyway..."
-    echo "[deploy] The rtmp-bridge has its own WebGPU preflight check."
+    WEBGPU_WORKING="headless-vulkan"
 fi
+
+# Test 2: Headless=new with EGL (NVIDIA EGL without X11)
+if [ "$WEBGPU_WORKING" = "false" ]; then
+    echo "[deploy] Test 2: Chrome headless=new with EGL..."
+    WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
+        --no-sandbox \
+        --disable-dev-shm-usage \
+        --use-gl=egl \
+        --enable-unsafe-webgpu \
+        --enable-features=Vulkan,UseSkiaRenderer,WebGPU \
+        --ignore-gpu-blocklist \
+        --disable-software-rasterizer \
+        --headless=new \
+        --dump-dom \
+        --virtual-time-budget=5000 \
+        "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
+    echo "[deploy] Test 2 Result: $WEBGPU_TEST_RESULT"
+    if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
+        WEBGPU_WORKING="headless-egl"
+        # Update streaming config to use EGL
+        export STREAM_CAPTURE_USE_EGL="true"
+        export STREAM_CAPTURE_ANGLE="default"
+    fi
+fi
+
+# Test 3: With Xvfb display (headful mode with virtual framebuffer)
+if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
+    echo "[deploy] Test 3: Chrome with DISPLAY=$DISPLAY (Xvfb)..."
+    WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
+        --no-sandbox \
+        --disable-dev-shm-usage \
+        --use-gl=angle \
+        --use-angle=vulkan \
+        --enable-unsafe-webgpu \
+        --enable-features=Vulkan,UseSkiaRenderer,WebGPU \
+        --ignore-gpu-blocklist \
+        --disable-software-rasterizer \
+        --dump-dom \
+        --virtual-time-budget=5000 \
+        "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
+    echo "[deploy] Test 3 Result: $WEBGPU_TEST_RESULT"
+    if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
+        WEBGPU_WORKING="xvfb-vulkan"
+    fi
+fi
+
+# Test 4: Try with ozone-platform=headless (Wayland-like headless)
+if [ "$WEBGPU_WORKING" = "false" ]; then
+    echo "[deploy] Test 4: Chrome with ozone-platform=headless..."
+    WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
+        --no-sandbox \
+        --disable-dev-shm-usage \
+        --ozone-platform=headless \
+        --use-gl=angle \
+        --use-angle=vulkan \
+        --enable-unsafe-webgpu \
+        --enable-features=Vulkan,UseSkiaRenderer,WebGPU \
+        --ignore-gpu-blocklist \
+        --disable-software-rasterizer \
+        --dump-dom \
+        --virtual-time-budget=5000 \
+        "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
+    echo "[deploy] Test 4 Result: $WEBGPU_TEST_RESULT"
+    if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
+        WEBGPU_WORKING="ozone-headless"
+        export STREAM_CAPTURE_OZONE_HEADLESS="true"
+    fi
+fi
+
+echo "[deploy] ═══════════════════════════════════════════════════════════"
+if [ "$WEBGPU_WORKING" != "false" ]; then
+    echo "[deploy] ✓ WebGPU WORKING with configuration: $WEBGPU_WORKING"
+else
+    echo "[deploy] ⚠️ WebGPU not confirmed working in any test configuration"
+    echo "[deploy] Proceeding anyway - rtmp-bridge has its own preflight check"
+fi
+echo "[deploy] ═══════════════════════════════════════════════════════════"
+
+# Export the working mode for streaming config
+export WEBGPU_MODE="$WEBGPU_WORKING"
 
 # ── Setup PulseAudio for audio capture ────────────────────────
 echo "[deploy] Setting up PulseAudio for audio streaming..."

@@ -146,7 +146,10 @@ module.exports = {
                 DISPLAY: process.env.DISPLAY || ":99",
                 // Headless mode is NOT supported for WebGPU - these should always be false
                 STREAM_CAPTURE_HEADLESS: "false",
-                STREAM_CAPTURE_USE_EGL: "false",
+                STREAM_CAPTURE_USE_EGL: process.env.STREAM_CAPTURE_USE_EGL || "false",
+                // Use ozone-platform=headless for GPU rendering without X11
+                // This is tried by deploy-vast.sh and set if it works
+                STREAM_CAPTURE_OZONE_HEADLESS: process.env.STREAM_CAPTURE_OZONE_HEADLESS || "false",
                 GPU_RENDERING_MODE: process.env.GPU_RENDERING_MODE || "xorg",
                 // Stabilize long-running streams by avoiding per-agent DuelCombatAI state polling churn.
                 STREAMING_DUEL_COMBAT_AI_ENABLED: "false",
