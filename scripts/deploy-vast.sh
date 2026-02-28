@@ -485,22 +485,31 @@ if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     # Create a Node.js test script using Playwright with explicit executable path
     cat > /tmp/playwright-webgpu-test.mjs << 'PLAYWRIGHTEOF'
 import { chromium } from 'playwright';
-// Try Xvfb non-headless with SwiftShader WebGPU (software fallback)
-// Since NVIDIA Xorg driver isn't working, use software WebGPU
+// Use EGL directly with NVIDIA GPU (bypass broken Xorg initialization)
+// nvidia-smi works, so GPU is accessible - just need EGL path
 const args = [
   '--no-sandbox',
   '--disable-dev-shm-usage',
-  // WebGPU with SwiftShader Vulkan backend (software)
+  // Use EGL directly (no Xorg needed)
+  '--use-gl=egl',
+  // Ozone platform for headless with GPU
+  '--ozone-platform=headless',
+  // Headless with GPU support (new mode, not old --headless)
+  '--headless=new',
+  // WebGPU essentials
   '--enable-unsafe-webgpu',
-  '--enable-features=WebGPU,Vulkan,UseSkiaRenderer',
+  '--enable-features=WebGPU,Vulkan,UseSkiaRenderer,VaapiVideoDecodeLinuxGL',
   '--ignore-gpu-blocklist',
-  // Use SwiftShader for Vulkan (software WebGPU)
-  '--use-angle=swiftshader',
-  '--use-vulkan=swiftshader',
-  // Enable WebGPU developer features (may help with software backend)
-  '--enable-webgpu-developer-features',
-  // Disable GPU sandbox to allow software rendering to work
+  // ANGLE with Vulkan backend for WebGPU
+  '--use-angle=vulkan',
+  // Enable GPU and disable software fallback
+  '--enable-gpu',
+  '--disable-software-rasterizer',
+  // Disable GPU sandbox for container environment
   '--disable-gpu-sandbox',
+  // Additional GPU flags
+  '--enable-gpu-rasterization',
+  '--enable-zero-copy',
 ];
 
 // Find Chrome Dev executable
@@ -525,16 +534,19 @@ try {
   console.log('DEBUG: args =', args.join(' '));
 
   const launchOpts = {
-    headless: false,  // Non-headless with Xvfb for display
+    headless: false,  // Playwright headless=false, we use --headless=new in args
     args,
-    // Only prevent Playwright from overriding headless mode
-    ignoreDefaultArgs: ['--headless'],
-    // Allow SwiftShader software rendering
+    // Prevent Playwright from adding conflicting headless/swiftshader flags
+    ignoreDefaultArgs: ['--headless', '--enable-unsafe-swiftshader'],
+    // NVIDIA GPU environment
     env: {
       ...process.env,
-      // Use SwiftShader ICD for Vulkan (software WebGPU)
-      VK_ICD_FILENAMES: '/usr/share/vulkan/icd.d/swiftshader_icd.json',
-      LIBGL_ALWAYS_SOFTWARE: '1',  // Allow software rendering
+      // NVIDIA Vulkan ICD for hardware WebGPU
+      VK_ICD_FILENAMES: '/usr/share/vulkan/icd.d/nvidia_icd.json',
+      LIBGL_ALWAYS_SOFTWARE: '0',  // Force hardware GPU
+      // NVIDIA EGL configuration
+      __NV_PRIME_RENDER_OFFLOAD: '1',
+      __GLX_VENDOR_LIBRARY_NAME: 'nvidia',
     },
   };
   if (executablePath) {
