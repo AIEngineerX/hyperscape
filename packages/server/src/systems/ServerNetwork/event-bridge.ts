@@ -882,6 +882,30 @@ export class EventBridge {
           console.error("[EventBridge] Error fetching bank data:", err);
         }
       });
+
+      // Send bank contents on player spawn so agents know what's in bank
+      // without having to physically open it first
+      this.world.on(EventType.PLAYER_SPAWNED, async (payload: unknown) => {
+        const data = payload as { playerId?: string };
+        if (!data.playerId) return;
+
+        try {
+          const db = this.getDatabase();
+          if (!db) return;
+
+          const bankRepo = new BankRepository(db.drizzle, db.pool);
+          const items = await bankRepo.getPlayerBank(data.playerId);
+
+          this.broadcast.sendToPlayer(data.playerId, "bankState", {
+            playerId: data.playerId,
+            bankId: "spawn_sync",
+            items,
+            maxSlots: 480,
+          });
+        } catch (_err) {
+          // Database may not be ready during early spawn — silently ignore
+        }
+      });
     } catch (_err) {
       console.error("[EventBridge] Error setting up banking events:", _err);
     }

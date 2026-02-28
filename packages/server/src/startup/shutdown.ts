@@ -289,7 +289,8 @@ export function registerShutdownHandlers(
       reasonStr.includes("initialization aborted") ||
       reasonStr.includes("shutdown in progress") ||
       reasonStr.includes("failed to register") ||
-      reasonStr.includes("runtime initialization");
+      reasonStr.includes("runtime initialization") ||
+      reasonStr.includes("Database is shutting down");
 
     if (isShuttingDown) {
       if (isNonFatalAgentError) {

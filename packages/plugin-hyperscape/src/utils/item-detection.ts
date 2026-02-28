@@ -261,22 +261,22 @@ export function hasCombatCapableItem(
   // Check equipped weapon first
   if (hasWeapon(player)) return true;
 
-  // Check inventory for combat-capable items (swords, axes, pickaxes, maces, etc.)
+  // Check inventory for combat-capable items.
+  // Validated against packages/server/world/assets/manifests/items/weapons.json.
+  // Uses "shortsword" not "sword" to avoid matching "swordfish" food items.
   const names = getItemNames(player.items);
   return names.some(
     (name) =>
-      name.includes("sword") ||
+      name.includes("shortsword") ||
+      name.includes("longsword") ||
       name.includes("scimitar") ||
       name.includes("dagger") ||
-      name.includes("mace") ||
-      name.includes("axe") || // Hatchets/axes are valid melee weapons
-      name.includes("hatchet") ||
+      name.includes("2h sword") ||
+      name.includes("2h_sword") ||
+      name.includes("hatchet") || // Hatchets are valid melee weapons
       name.includes("pickaxe") || // Pickaxes are valid melee weapons
-      name.includes("spear") ||
-      name.includes("longsword") ||
-      name.includes("battleaxe") ||
-      name.includes("warhammer") ||
-      name.includes("2h") || // Two-handed weapons
+      name.includes("shortbow") ||
+      name.includes("longbow") ||
       name.includes("staff"),
   );
 }

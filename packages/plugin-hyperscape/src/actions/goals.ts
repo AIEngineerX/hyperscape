@@ -116,6 +116,10 @@ function resolveGoalTargetPosition(
     location?: string;
     targetEntity?: string;
     targetPosition?: Position3;
+    type?: string;
+    questStartNpc?: string;
+    questStageType?: string;
+    questStageTarget?: string;
   } | null,
 ): { targetPos: Position3; targetName: string } | null {
   if (!goal) return null;
@@ -154,6 +158,55 @@ function resolveGoalTargetPosition(
     const known = KNOWN_LOCATIONS[normalizeLocationKey(goal.location)];
     if (known?.position) {
       return { targetPos: known.position, targetName: goal.location };
+    }
+  }
+
+  // Quest NPC resolution: look up questStartNpc in KNOWN_LOCATIONS (populated by populateKnownLocationsFromWorldMap)
+  if (goal.questStartNpc) {
+    const npcKey = normalizeLocationKey(goal.questStartNpc);
+    const npcLoc = KNOWN_LOCATIONS[npcKey];
+    if (npcLoc?.position) {
+      return { targetPos: npcLoc.position, targetName: goal.questStartNpc };
+    }
+    // Fallback: search worldMap.npcs directly
+    const worldMap = service.getWorldMap?.();
+    if (worldMap?.npcs) {
+      const npc = worldMap.npcs.find(
+        (n: { id: string }) => normalizeLocationKey(n.id) === npcKey,
+      );
+      if (npc) {
+        const pos: Position3 = [npc.position.x, npc.position.y, npc.position.z];
+        return { targetPos: pos, targetName: goal.questStartNpc };
+      }
+    }
+  }
+
+  // Quest stage location resolution: map stage type + target to a known area
+  if (goal.questStageType && goal.questStageTarget) {
+    const stageTarget = goal.questStageTarget.toLowerCase();
+    const stageType = goal.questStageType;
+    let areaKey: string | null = null;
+
+    if (stageType === "kill") {
+      areaKey = "spawn"; // combat mobs near spawn
+    } else if (stageType === "gather") {
+      if (stageTarget.includes("log") || stageTarget.includes("wood"))
+        areaKey = "forest";
+      else if (stageTarget.includes("ore")) areaKey = "mine";
+      else if (stageTarget.includes("fish") || stageTarget.includes("shrimp"))
+        areaKey = "fishing";
+    } else if (stageType === "interact") {
+      if (stageTarget.includes("smelt") || stageTarget.includes("furnace"))
+        areaKey = "furnace";
+      else if (stageTarget.includes("smith") || stageTarget.includes("anvil"))
+        areaKey = "anvil";
+    }
+
+    if (areaKey) {
+      const areaLoc = KNOWN_LOCATIONS[areaKey];
+      if (areaLoc?.position) {
+        return { targetPos: areaLoc.position, targetName: areaKey };
+      }
     }
   }
 
@@ -1006,7 +1059,7 @@ export const navigateToAction: Action = {
 
       await service.executeMove({
         target: moveTarget,
-        runMode: false,
+        runMode: true,
       });
 
       await callback?.({ text: responseText, action: "NAVIGATE_TO" });
@@ -1016,7 +1069,11 @@ export const navigateToAction: Action = {
       return {
         success: true,
         text: responseText,
-        data: { action: "NAVIGATE_TO", destination: destinationKey },
+        data: {
+          action: "NAVIGATE_TO",
+          destination: destinationKey,
+          moving: true,
+        },
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);

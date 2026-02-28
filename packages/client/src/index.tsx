@@ -708,6 +708,11 @@ const LeaderboardScreen = React.lazy(() =>
     default: m.LeaderboardScreen,
   })),
 );
+const AgentMonitorScreen = React.lazy(() =>
+  import("./screens/AgentMonitorScreen").then((m) => ({
+    default: m.AgentMonitorScreen,
+  })),
+);
 import {
   isTauriApp,
   onDeepLink,
@@ -846,6 +851,17 @@ async function mountApp() {
         <ErrorBoundary>
           <React.Suspense fallback={<ScreenLoadingFallback />}>
             <LeaderboardScreen />
+          </React.Suspense>
+        </ErrorBoundary>,
+      );
+    } else if (page === "agent-monitor") {
+      console.log(
+        "[Hyperscape] Agent monitor mode detected - rendering AgentMonitorScreen",
+      );
+      root.render(
+        <ErrorBoundary>
+          <React.Suspense fallback={<ScreenLoadingFallback />}>
+            <AgentMonitorScreen />
           </React.Suspense>
         </ErrorBoundary>,
       );

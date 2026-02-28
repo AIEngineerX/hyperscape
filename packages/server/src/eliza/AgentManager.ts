@@ -260,7 +260,7 @@ export class AgentManager {
   private world: World;
   private agents: Map<string, AgentInstance> = new Map();
   private isShuttingDown: boolean = false;
-  private readonly behaviorTicker: AgentBehaviorTicker;
+  readonly behaviorTicker: AgentBehaviorTicker;
   private readonly commandDispatcher: AgentCommandDispatcher;
   /** Stored event handler reference for cleanup during shutdown */
   private readonly combatDamageHandler: (data: unknown) => void;

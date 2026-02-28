@@ -1005,6 +1005,7 @@ export const attackEntityAction: Action = {
           action: "ATTACK_ENTITY",
           targetId: nearestMob.id,
           targetName: nearestMob.name,
+          attacking: true,
         },
       };
     } catch (error) {

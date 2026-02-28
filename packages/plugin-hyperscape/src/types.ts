@@ -261,6 +261,15 @@ export interface WorldMapData {
   npcs?: WorldMapNPC[];
 }
 
+/** A single item stored in the bank */
+export interface BankItem {
+  itemId: string;
+  name?: string;
+  quantity: number;
+  slot?: number;
+  tabIndex?: number;
+}
+
 export interface GameStateCache {
   playerEntity: PlayerEntity | null;
   nearbyEntities: Map<string, Entity>;
@@ -271,6 +280,8 @@ export interface GameStateCache {
   worldMap?: WorldMapData;
   /** Active quests */
   quests: QuestData[];
+  /** Cached bank contents (populated when bank is opened or on spawn) */
+  bankItems: BankItem[];
 }
 
 /**
