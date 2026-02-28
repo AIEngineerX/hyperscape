@@ -102,9 +102,9 @@ jobs:
         run: |
           cd packages/physx-js-webidl && bun run build
           cd ../decimation && bun run build
-          cd ../shared && bun run build
           cd ../impostors && bun run build
           cd ../procgen && bun run build
+          cd ../shared && bun run build
           cd ../plugin-hyperscape && bun run build
           cd ../server && bun run build
 
