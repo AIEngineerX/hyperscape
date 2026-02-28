@@ -485,26 +485,22 @@ if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     # Create a Node.js test script using Playwright with explicit executable path
     cat > /tmp/playwright-webgpu-test.mjs << 'PLAYWRIGHTEOF'
 import { chromium } from 'playwright';
-// Full WebGPU flags for NVIDIA GPU with headless GPU mode (no Xorg needed)
+// Try Xvfb non-headless with SwiftShader WebGPU (software fallback)
+// Since NVIDIA Xorg driver isn't working, use software WebGPU
 const args = [
   '--no-sandbox',
   '--disable-dev-shm-usage',
-  // NEW headless mode that supports GPU (unlike old --headless)
-  '--headless=new',
-  // Use headless ozone platform - this enables GPU without display server
-  '--ozone-platform=headless',
-  // Use EGL for GPU rendering (works without Xorg)
-  '--use-gl=egl',
-  // WebGPU essentials
+  // WebGPU with SwiftShader Vulkan backend (software)
   '--enable-unsafe-webgpu',
   '--enable-features=WebGPU,Vulkan,UseSkiaRenderer',
   '--ignore-gpu-blocklist',
-  // ANGLE/Vulkan for WebGPU backend
-  '--use-angle=vulkan',
-  '--use-vulkan',
-  // Enable GPU in headless
-  '--enable-gpu',
-  '--disable-software-rasterizer',
+  // Use SwiftShader for Vulkan (software WebGPU)
+  '--use-angle=swiftshader',
+  '--use-vulkan=swiftshader',
+  // Enable WebGPU developer features (may help with software backend)
+  '--enable-webgpu-developer-features',
+  // Disable GPU sandbox to allow software rendering to work
+  '--disable-gpu-sandbox',
 ];
 
 // Find Chrome Dev executable
@@ -529,15 +525,16 @@ try {
   console.log('DEBUG: args =', args.join(' '));
 
   const launchOpts = {
-    headless: false,  // We handle headless via --headless=new flag for GPU support
+    headless: false,  // Non-headless with Xvfb for display
     args,
-    // Prevent Playwright from adding flags that conflict with GPU rendering
-    ignoreDefaultArgs: ['--enable-unsafe-swiftshader', '--headless'],
-    // Pass critical GPU environment variables to Chrome
+    // Only prevent Playwright from overriding headless mode
+    ignoreDefaultArgs: ['--headless'],
+    // Allow SwiftShader software rendering
     env: {
       ...process.env,
-      VK_ICD_FILENAMES: process.env.VK_ICD_FILENAMES || '/usr/share/vulkan/icd.d/nvidia_icd.json',
-      LIBGL_ALWAYS_SOFTWARE: '0',  // Force hardware GPU
+      // Use SwiftShader ICD for Vulkan (software WebGPU)
+      VK_ICD_FILENAMES: '/usr/share/vulkan/icd.d/swiftshader_icd.json',
+      LIBGL_ALWAYS_SOFTWARE: '1',  // Allow software rendering
     },
   };
   if (executablePath) {
