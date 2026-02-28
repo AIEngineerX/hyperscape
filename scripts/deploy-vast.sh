@@ -485,15 +485,20 @@ if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     # Create a Node.js test script using Playwright with explicit executable path
     cat > /tmp/playwright-webgpu-test.mjs << 'PLAYWRIGHTEOF'
 import { chromium } from 'playwright';
-// Test with WebGPU flags added incrementally
-// Known working: --no-sandbox, --disable-dev-shm-usage
+// Full WebGPU flags for NVIDIA GPU
 const args = [
   '--no-sandbox',
   '--disable-dev-shm-usage',
-  // Add WebGPU essentials (testing if these cause crash)
+  // WebGPU essentials
   '--enable-unsafe-webgpu',
-  '--enable-features=WebGPU',
+  '--enable-features=WebGPU,Vulkan',
   '--ignore-gpu-blocklist',
+  // ANGLE/Vulkan for GPU rendering
+  '--use-angle=vulkan',
+  '--use-vulkan',
+  // GPU process flags
+  '--enable-gpu-rasterization',
+  '--enable-zero-copy',
 ];
 
 // Find Chrome Dev executable
@@ -572,6 +577,23 @@ try {
 
   } catch (e) {
     console.log('DEBUG: Basic render failed:', e.message);
+  }
+
+  // Check chrome://gpu for diagnostics
+  console.log('DEBUG: Checking chrome://gpu...');
+  try {
+    await page.goto('chrome://gpu', { timeout: 10000 });
+    const gpuStatus = await page.evaluate(() => {
+      const featureStatusList = document.getElementById('feature-status-list');
+      if (featureStatusList) {
+        // Get first 500 chars of GPU feature status
+        return featureStatusList.innerText.substring(0, 500);
+      }
+      return 'GPU status not found';
+    });
+    console.log('DEBUG: chrome://gpu status:', gpuStatus.substring(0, 200));
+  } catch (e) {
+    console.log('DEBUG: chrome://gpu failed:', e.message);
   }
 
   // Now check navigator.gpu directly on blank page
