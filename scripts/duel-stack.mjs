@@ -1183,9 +1183,30 @@ async function main() {
     }
 
     if (!clientWasReady) {
-      spawnManaged("game-client", "bun", ["run", "--cwd", "packages/client", "dev"], {
-        env: gameEnv,
-      });
+      // Check if production build exists and should be used
+      const clientDistPath = path.join(ROOT, "packages/client/dist/index.html");
+      const useProductionBuild =
+        process.env.NODE_ENV === "production" ||
+        process.env.DUEL_CLIENT_MODE === "production" ||
+        /^(1|true|yes|on)$/i.test(process.env.DUEL_USE_PRODUCTION_CLIENT || "");
+      const distExists = fs.existsSync(clientDistPath);
+
+      if (useProductionBuild && distExists) {
+        log("starting game client in production mode (vite preview)...");
+        spawnManaged(
+          "game-client",
+          "bun",
+          ["run", "--cwd", "packages/client", "preview", "--", "--host", "--port", "3333"],
+          { env: gameEnv },
+        );
+      } else {
+        if (useProductionBuild && !distExists) {
+          log("warning: production client requested but dist not found, falling back to dev mode");
+        }
+        spawnManaged("game-client", "bun", ["run", "--cwd", "packages/client", "dev"], {
+          env: gameEnv,
+        });
+      }
     }
   }
 
