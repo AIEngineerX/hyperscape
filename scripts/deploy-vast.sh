@@ -485,20 +485,26 @@ if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     # Create a Node.js test script using Playwright with explicit executable path
     cat > /tmp/playwright-webgpu-test.mjs << 'PLAYWRIGHTEOF'
 import { chromium } from 'playwright';
-// Full WebGPU flags for NVIDIA GPU
+// Full WebGPU flags for NVIDIA GPU with headless GPU mode (no Xorg needed)
 const args = [
   '--no-sandbox',
   '--disable-dev-shm-usage',
+  // NEW headless mode that supports GPU (unlike old --headless)
+  '--headless=new',
+  // Use headless ozone platform - this enables GPU without display server
+  '--ozone-platform=headless',
+  // Use EGL for GPU rendering (works without Xorg)
+  '--use-gl=egl',
   // WebGPU essentials
   '--enable-unsafe-webgpu',
-  '--enable-features=WebGPU,Vulkan',
+  '--enable-features=WebGPU,Vulkan,UseSkiaRenderer',
   '--ignore-gpu-blocklist',
-  // ANGLE/Vulkan for GPU rendering
+  // ANGLE/Vulkan for WebGPU backend
   '--use-angle=vulkan',
   '--use-vulkan',
-  // GPU process flags
-  '--enable-gpu-rasterization',
-  '--enable-zero-copy',
+  // Enable GPU in headless
+  '--enable-gpu',
+  '--disable-software-rasterizer',
 ];
 
 // Find Chrome Dev executable
@@ -523,10 +529,10 @@ try {
   console.log('DEBUG: args =', args.join(' '));
 
   const launchOpts = {
-    headless: false,  // Non-headless for WebGPU
+    headless: false,  // We handle headless via --headless=new flag for GPU support
     args,
-    // Prevent Playwright from adding SwiftShader which conflicts with GPU rendering
-    ignoreDefaultArgs: ['--enable-unsafe-swiftshader'],
+    // Prevent Playwright from adding flags that conflict with GPU rendering
+    ignoreDefaultArgs: ['--enable-unsafe-swiftshader', '--headless'],
     // Pass critical GPU environment variables to Chrome
     env: {
       ...process.env,
