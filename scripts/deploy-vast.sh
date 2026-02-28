@@ -334,6 +334,19 @@ else
     echo "[deploy] Chrome Dev already installed: $(google-chrome-unstable --version)"
 fi
 
+# ── Install Playwright for WebGPU tests (must be before tests) ───────────────
+export PATH="/root/.bun/bin:$PATH"
+cd /root/hyperscape
+echo "[deploy] Installing Playwright module for WebGPU testing..."
+# Install playwright module so bun can import it for Test 6
+bun add playwright --dev 2>/dev/null || bun install playwright 2>/dev/null || true
+echo "[deploy] Installing Playwright browser (Chromium)..."
+bunx playwright install chromium --with-deps 2>/dev/null || {
+    echo "[deploy] Playwright browser install failed, trying manual deps..."
+    bunx playwright install chromium || true
+    bunx playwright install-deps chromium || true
+}
+
 # ── Test WebGPU with different configurations ───────────────────────────
 echo "[deploy] ═══════════════════════════════════════════════════════════"
 echo "[deploy] Testing WebGPU before starting services..."
@@ -527,7 +540,8 @@ PLAYWRIGHTEOF
 
     # Set PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD to avoid download attempts
     export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-    WEBGPU_TEST_RESULT=$(timeout 60 node /tmp/playwright-webgpu-test.mjs 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
+    # Use bun instead of node since playwright is installed via bunx
+    WEBGPU_TEST_RESULT=$(timeout 60 bun run /tmp/playwright-webgpu-test.mjs 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
     echo "[deploy] Test 6 Result: $WEBGPU_TEST_RESULT"
     if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
         WEBGPU_WORKING="playwright-xvfb"
@@ -600,11 +614,14 @@ fi
 export PULSE_SERVER="unix:$XDG_RUNTIME_DIR/pulse/native"
 echo "[deploy] PULSE_SERVER=$PULSE_SERVER"
 
-# ── Install Playwright and deps ───────────────────────────────
+# ── Verify Playwright (already installed for WebGPU tests) ─────────────
 export PATH="/root/.bun/bin:$PATH"
-echo "[deploy] Installing Playwright dependencies..."
-bunx playwright install chromium || true
-bunx playwright install-deps chromium || true
+echo "[deploy] Verifying Playwright installation..."
+# Skip install if already done above; just verify
+bunx playwright --version || {
+    echo "[deploy] Playwright not found, installing..."
+    bunx playwright install chromium --with-deps || true
+}
 
 # ── Install dependencies ──────────────────────────────────────
 echo "[deploy] Installing dependencies..."
