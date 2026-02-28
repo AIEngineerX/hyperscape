@@ -486,12 +486,19 @@ if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     cat > /tmp/playwright-webgpu-test.mjs << 'PLAYWRIGHTEOF'
 import { chromium } from 'playwright';
 const args = [
+  // GPU / WebGPU essentials
+  '--use-gl=angle', '--use-angle=vulkan',
+  '--enable-unsafe-webgpu',
+  '--enable-features=Vulkan,UseSkiaRenderer,WebGPU',
+  '--ignore-gpu-blocklist',
+  '--enable-gpu-rasterization',
+  '--disable-software-rasterizer',
+  '--disable-gpu-driver-bug-workarounds',
+  '--enable-accelerated-2d-canvas',
+  '--enable-gpu-compositing',
+  // Sandbox & stability - CRITICAL for container GPU access
   '--no-sandbox', '--disable-gpu-sandbox', '--disable-setuid-sandbox',
-  '--disable-dev-shm-usage', '--use-vulkan', '--use-gl=angle', '--use-angle=vulkan',
-  '--enable-unsafe-webgpu', '--enable-webgpu-developer-features',
-  '--enable-features=Vulkan,UseSkiaRenderer,WebGPU,WebGPUService',
-  '--ignore-gpu-blocklist', '--disable-software-rasterizer',
-  '--disable-gpu-driver-bug-workarounds', '--in-process-gpu'
+  '--disable-dev-shm-usage',
 ];
 
 // Find Chrome Dev executable
@@ -517,6 +524,8 @@ try {
   const launchOpts = {
     headless: false,  // Non-headless for WebGPU
     args,
+    // Prevent Playwright from adding SwiftShader which conflicts with GPU rendering
+    ignoreDefaultArgs: ['--enable-unsafe-swiftshader'],
   };
   if (executablePath) {
     launchOpts.executablePath = executablePath;
@@ -585,7 +594,11 @@ PLAYWRIGHTEOF
     # Set PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD to avoid download attempts
     export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
     # Use bun instead of node since playwright is installed via bunx
-    WEBGPU_TEST_RESULT=$(timeout 60 bun run /tmp/playwright-webgpu-test.mjs 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
+    # Capture full output to see DEBUG info
+    echo "[deploy] Running Playwright WebGPU test..."
+    timeout 60 bun run /tmp/playwright-webgpu-test.mjs 2>&1 | tee /tmp/webgpu-test-output.log
+    # Extract result from the captured output
+    WEBGPU_TEST_RESULT=$(grep -o 'WEBGPU_RESULT: .*' /tmp/webgpu-test-output.log | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
     echo "[deploy] Test 6 Result: $WEBGPU_TEST_RESULT"
     if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
         WEBGPU_WORKING="playwright-xvfb"
