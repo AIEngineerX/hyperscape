@@ -485,29 +485,12 @@ if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     # Create a Node.js test script using Playwright with explicit executable path
     cat > /tmp/playwright-webgpu-test.mjs << 'PLAYWRIGHTEOF'
 import { chromium } from 'playwright';
-// Try both GPU and software rendering to diagnose
-const useGPU = process.env.TEST_GPU_MODE !== 'false';
-console.log('DEBUG: Testing with GPU mode:', useGPU);
-
-const gpuArgs = [
-  // CRITICAL: Sandbox settings for container GPU access
-  '--no-sandbox', '--disable-gpu-sandbox', '--disable-setuid-sandbox',
+// Test with MINIMAL flags first to see if Chrome can even render
+const args = [
+  // Only the absolutely critical flags
+  '--no-sandbox',
   '--disable-dev-shm-usage',
-  // GPU / WebGPU essentials
-  '--use-gl=angle', '--use-angle=vulkan',
-  '--enable-unsafe-webgpu',
-  '--enable-features=Vulkan,UseSkiaRenderer,WebGPU',
-  '--ignore-gpu-blocklist',
 ];
-
-const softwareArgs = [
-  '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-  // Software rendering - no GPU
-  '--disable-gpu',
-  '--use-gl=swiftshader',
-];
-
-const args = useGPU ? gpuArgs : softwareArgs;
 
 // Find Chrome Dev executable
 const chromePaths = [
@@ -569,40 +552,22 @@ try {
 
   const page = await browser.newPage();
 
-  // Check WebGL as baseline for GPU access, then check WebGPU
-  console.log('DEBUG: Testing GPU access...');
+  // Simple test - just see if we can render ANY page
+  console.log('DEBUG: Testing basic page render...');
   try {
-    // Listen for browser errors
     page.on('pageerror', err => console.log('BROWSER ERROR:', err.message));
 
+    // Try rendering a simple page
+    await page.goto('data:text/html,<h1>Test</h1>', { timeout: 30000 });
+    const title = await page.evaluate(() => document.body.innerHTML);
+    console.log('DEBUG: Page rendered successfully, content:', title.substring(0, 50));
+
+    // Now try about:blank
     await page.goto('about:blank', { timeout: 10000 });
+    console.log('DEBUG: about:blank loaded successfully');
 
-    // Test WebGL first (baseline for GPU)
-    const webglInfo = await page.evaluate(() => {
-      try {
-        const canvas = document.createElement('canvas');
-        const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
-        if (!gl) return { working: false, error: 'No WebGL context' };
-        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-        return {
-          working: true,
-          vendor: debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
-          renderer: debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
-        };
-      } catch (e) {
-        return { working: false, error: e.message };
-      }
-    });
-
-    console.log('DEBUG: WebGL working:', webglInfo.working);
-    if (webglInfo.working) {
-      console.log('DEBUG: WebGL vendor:', webglInfo.vendor);
-      console.log('DEBUG: WebGL renderer:', webglInfo.renderer);
-    } else {
-      console.log('DEBUG: WebGL error:', webglInfo.error);
-    }
   } catch (e) {
-    console.log('DEBUG: Error testing WebGL:', e.message);
+    console.log('DEBUG: Basic render failed:', e.message);
   }
 
   // Now check navigator.gpu directly on blank page
