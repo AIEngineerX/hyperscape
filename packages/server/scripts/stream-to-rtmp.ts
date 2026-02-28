@@ -692,14 +692,51 @@ async function launchCaptureBrowser() {
     },
   };
 
+  // Log critical environment for WebGPU debugging
+  console.log(`[Main] Browser launch config:`);
+  console.log(`  - DISPLAY: ${process.env.DISPLAY || "(not set)"}`);
+  console.log(`  - STREAM_CAPTURE_HEADLESS: ${STREAM_CAPTURE_HEADLESS}`);
+  console.log(
+    `  - STREAM_CAPTURE_EXECUTABLE: ${STREAM_CAPTURE_EXECUTABLE || "(not set)"}`,
+  );
+  console.log(
+    `  - STREAM_CAPTURE_CHANNEL: ${STREAM_CAPTURE_CHANNEL || "(not set)"}`,
+  );
+  console.log(`  - playwrightHeadless: ${playwrightHeadless}`);
+  console.log(
+    `  - VK_ICD_FILENAMES: ${process.env.VK_ICD_FILENAMES || "(not set)"}`,
+  );
+
+  // Try explicit executable first (most reliable for WebGPU)
   if (STREAM_CAPTURE_EXECUTABLE) {
-    console.log(
-      `[Main] Launching with explicit executable: ${STREAM_CAPTURE_EXECUTABLE}`,
-    );
-    return await chromium.launch({
-      ...launchConfig,
-      executablePath: STREAM_CAPTURE_EXECUTABLE,
-    });
+    if (fs.existsSync(STREAM_CAPTURE_EXECUTABLE)) {
+      console.log(
+        `[Main] Launching with explicit executable: ${STREAM_CAPTURE_EXECUTABLE}`,
+      );
+      return await chromium.launch({
+        ...launchConfig,
+        executablePath: STREAM_CAPTURE_EXECUTABLE,
+      });
+    } else {
+      console.warn(
+        `[Main] Executable not found: ${STREAM_CAPTURE_EXECUTABLE}, trying alternatives...`,
+      );
+      // Try common Chrome Dev locations
+      const alternatives = [
+        "/usr/bin/google-chrome-unstable",
+        "/opt/google/chrome-unstable/google-chrome-unstable",
+        "/usr/bin/google-chrome",
+      ];
+      for (const alt of alternatives) {
+        if (fs.existsSync(alt)) {
+          console.log(`[Main] Found alternative: ${alt}`);
+          return await chromium.launch({
+            ...launchConfig,
+            executablePath: alt,
+          });
+        }
+      }
+    }
   }
 
   if (STREAM_CAPTURE_CHANNEL) {

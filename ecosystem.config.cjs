@@ -90,7 +90,8 @@ module.exports = {
                 // Run headful with Xvfb for GPU access (set by DUEL_CAPTURE_USE_XVFB)
                 STREAM_CAPTURE_HEADLESS: "false",
                 // Use Chrome Dev channel (google-chrome-unstable) for WebGPU support
-                // Playwright channel name mapping: chrome-dev -> google-chrome-unstable
+                // Explicit path is more reliable than Playwright channel resolution
+                STREAM_CAPTURE_EXECUTABLE: "/usr/bin/google-chrome-unstable",
                 STREAM_CAPTURE_CHANNEL: "chrome-dev",
                 // Use vulkan ANGLE backend with NVIDIA hardware Vulkan
                 // Force only NVIDIA ICD to avoid conflicts with broken Mesa ICDs
