@@ -45,8 +45,40 @@ export interface RenderingCapabilities {
 }
 
 /**
+ * Helper to add timeout to a promise.
+ * Returns the result or rejects if timeout exceeded.
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
+/** Default timeout for WebGPU adapter request (30 seconds) */
+const WEBGPU_ADAPTER_TIMEOUT_MS = 30000;
+
+/**
  * Check if WebGPU is available in the current browser.
  * WebGPU is REQUIRED for Hyperscape - there is no fallback.
+ *
+ * Note: This includes a timeout to prevent indefinite hangs when
+ * WebGPU initialization gets stuck (common on misconfigured GPU servers).
  */
 export async function isWebGPUAvailable(): Promise<boolean> {
   if (typeof navigator === "undefined") return false;
@@ -62,9 +94,22 @@ export async function isWebGPUAvailable(): Promise<boolean> {
   if (!gpuApi) return false;
 
   try {
-    const adapter = await gpuApi.requestAdapter();
+    // Add timeout to prevent indefinite hangs
+    const adapter = await withTimeout(
+      gpuApi.requestAdapter(),
+      WEBGPU_ADAPTER_TIMEOUT_MS,
+      "WebGPU requestAdapter",
+    );
     return adapter !== null;
-  } catch {
+  } catch (err) {
+    // Log timeout vs other errors for debugging
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("timed out")) {
+      Logger.error(
+        `[RendererFactory] WebGPU adapter request timed out after ${WEBGPU_ADAPTER_TIMEOUT_MS}ms. ` +
+          "This often indicates GPU driver or display configuration issues.",
+      );
+    }
     return false;
   }
 }
@@ -145,6 +190,9 @@ export async function createRenderer(
     powerPreference: webgpuPowerPreference,
   };
 
+  /** Timeout for renderer.init() to prevent indefinite hangs */
+  const RENDERER_INIT_TIMEOUT_MS = 60000;
+
   let renderer: InstanceType<typeof THREE.WebGPURenderer> | null = null;
 
   // First attempt: request extended texture array layers
@@ -155,7 +203,11 @@ export async function createRenderer(
         maxTextureArrayLayers: 2048,
       },
     });
-    await renderer.init();
+    await withTimeout(
+      renderer.init(),
+      RENDERER_INIT_TIMEOUT_MS,
+      "WebGPU renderer.init() with extended limits",
+    );
   } catch (limitsError) {
     const msg =
       limitsError instanceof Error ? limitsError.message : String(limitsError);
@@ -169,7 +221,11 @@ export async function createRenderer(
   if (!renderer) {
     try {
       renderer = new THREE.WebGPURenderer(baseRendererOpts);
-      await renderer.init();
+      await withTimeout(
+        renderer.init(),
+        RENDERER_INIT_TIMEOUT_MS,
+        "WebGPU renderer.init()",
+      );
     } catch (error) {
       const initError =
         error instanceof Error ? error.message : "Unknown initialization error";
