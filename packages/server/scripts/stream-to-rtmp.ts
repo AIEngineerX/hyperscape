@@ -316,6 +316,9 @@ async function waitForStreamReadiness(
   const deadline = startedAt + timeoutMs;
   let probeCount = 0;
 
+  let consecutiveTimeouts = 0;
+  const MAX_CONSECUTIVE_TIMEOUTS = 5;
+
   while (Date.now() < deadline) {
     probeCount++;
     try {
@@ -342,6 +345,7 @@ async function waitForStreamReadiness(
       );
 
       const probe = await Promise.race([probePromise, timeoutPromise]);
+      consecutiveTimeouts = 0; // Reset on success
 
       // Log probe status every 10 seconds
       if (probeCount % 10 === 0 || probeCount === 1) {
@@ -370,8 +374,26 @@ async function waitForStreamReadiness(
         return true;
       }
     } catch (err) {
-      if (!isTransientPageEvalError(err)) {
-        console.warn("[Main] Stream readiness probe failed:", errMsg(err));
+      const errMessage = errMsg(err);
+      const isTimeout =
+        errMessage.includes("timeout") || errMessage.includes("Timeout");
+
+      if (isTimeout) {
+        consecutiveTimeouts++;
+        console.warn(
+          `[Main] Stream readiness probe failed (timeout ${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS}): ${errMessage}`,
+        );
+
+        // If we get too many consecutive timeouts, assume the page is stuck
+        // and proceed with capture anyway (WebGPU might be blocking JS but still rendering)
+        if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+          console.warn(
+            `[Main] Too many consecutive probe timeouts (${consecutiveTimeouts}). Proceeding with capture anyway...`,
+          );
+          return true;
+        }
+      } else if (!isTransientPageEvalError(err)) {
+        console.warn("[Main] Stream readiness probe failed:", errMessage);
       }
     }
 
