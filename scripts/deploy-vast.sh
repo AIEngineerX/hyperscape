@@ -488,9 +488,10 @@ import { chromium } from 'playwright';
 const args = [
   '--no-sandbox', '--disable-gpu-sandbox', '--disable-setuid-sandbox',
   '--disable-dev-shm-usage', '--use-vulkan', '--use-gl=angle', '--use-angle=vulkan',
-  '--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,WebGPU',
+  '--enable-unsafe-webgpu', '--enable-webgpu-developer-features',
+  '--enable-features=Vulkan,UseSkiaRenderer,WebGPU,WebGPUService',
   '--ignore-gpu-blocklist', '--disable-software-rasterizer',
-  '--disable-gpu-driver-bug-workarounds'
+  '--disable-gpu-driver-bug-workarounds', '--in-process-gpu'
 ];
 
 // Find Chrome Dev executable
@@ -508,6 +509,11 @@ for (const p of chromePaths) {
 }
 
 try {
+  console.log('DEBUG: Starting browser launch...');
+  console.log('DEBUG: executablePath =', executablePath);
+  console.log('DEBUG: DISPLAY =', process.env.DISPLAY);
+  console.log('DEBUG: args =', args.join(' '));
+
   const launchOpts = {
     headless: false,  // Non-headless for WebGPU
     args,
@@ -519,20 +525,58 @@ try {
   }
 
   const browser = await chromium.launch(launchOpts);
+  console.log('DEBUG: Browser launched successfully');
+
   const page = await browser.newPage();
 
-  // Check navigator.gpu directly on blank page (no need to load test HTML)
-  await page.goto('about:blank', { timeout: 10000 });
-  const hasWebGPU = await page.evaluate(() => !!navigator.gpu);
+  // First check chrome://gpu to see GPU status
+  console.log('DEBUG: Checking chrome://gpu...');
+  await page.goto('chrome://gpu', { timeout: 15000 });
+  const gpuInfo = await page.evaluate(() => {
+    const body = document.body.innerText;
+    const webgpuMatch = body.match(/WebGPU[:\s]*(.*?)[\n\r]/i);
+    const vulkanMatch = body.match(/Vulkan[:\s]*(.*?)[\n\r]/i);
+    return {
+      webgpu: webgpuMatch ? webgpuMatch[1].trim() : 'not found',
+      vulkan: vulkanMatch ? vulkanMatch[1].trim() : 'not found',
+      preview: body.substring(0, 500)
+    };
+  });
+  console.log('DEBUG: WebGPU status from chrome://gpu:', gpuInfo.webgpu);
+  console.log('DEBUG: Vulkan status from chrome://gpu:', gpuInfo.vulkan);
 
-  if (hasWebGPU) {
-    console.log('WEBGPU_RESULT: SUCCESS - navigator.gpu available');
+  // Now check navigator.gpu directly on blank page
+  await page.goto('about:blank', { timeout: 10000 });
+  const gpuResult = await page.evaluate(async () => {
+    if (!navigator.gpu) {
+      return { available: false, error: 'navigator.gpu is undefined' };
+    }
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) {
+        return { available: false, error: 'requestAdapter returned null' };
+      }
+      const info = await adapter.requestAdapterInfo();
+      return {
+        available: true,
+        vendor: info.vendor,
+        architecture: info.architecture,
+        description: info.description
+      };
+    } catch (e) {
+      return { available: false, error: 'requestAdapter failed: ' + e.message };
+    }
+  });
+
+  if (gpuResult.available) {
+    console.log('WEBGPU_RESULT: SUCCESS - ' + gpuResult.vendor + ' / ' + gpuResult.description);
   } else {
-    console.log('WEBGPU_RESULT: FAILED - navigator.gpu not available');
+    console.log('WEBGPU_RESULT: FAILED - ' + gpuResult.error);
   }
   await browser.close();
-  process.exit(hasWebGPU ? 0 : 1);
+  process.exit(gpuResult.available ? 0 : 1);
 } catch (e) {
+  console.log('DEBUG: Error caught:', e.message);
   console.log('WEBGPU_RESULT: FAILED - ' + e.message);
   process.exit(1);
 }
