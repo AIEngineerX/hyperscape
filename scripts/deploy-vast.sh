@@ -547,28 +547,48 @@ try {
 
   // First check chrome://gpu to see GPU status
   console.log('DEBUG: Checking chrome://gpu...');
-  await page.goto('chrome://gpu', { timeout: 15000 });
-  const gpuInfo = await page.evaluate(() => {
-    const body = document.body.innerText;
-    const webgpuMatch = body.match(/WebGPU[:\s]*(.*?)[\n\r]/i);
-    const vulkanMatch = body.match(/Vulkan[:\s]*(.*?)[\n\r]/i);
-    // Look for GPU driver info
-    const driverMatch = body.match(/GL_VENDOR[:\s]*(.*?)[\n\r]/i);
-    const rendererMatch = body.match(/GL_RENDERER[:\s]*(.*?)[\n\r]/i);
-    return {
-      webgpu: webgpuMatch ? webgpuMatch[1].trim() : 'not found',
-      vulkan: vulkanMatch ? vulkanMatch[1].trim() : 'not found',
-      glVendor: driverMatch ? driverMatch[1].trim() : 'not found',
-      glRenderer: rendererMatch ? rendererMatch[1].trim() : 'not found',
-      // Get first 1000 chars to see what's on the page
-      preview: body.substring(0, 1000)
-    };
-  });
-  console.log('DEBUG: WebGPU status:', gpuInfo.webgpu);
-  console.log('DEBUG: Vulkan status:', gpuInfo.vulkan);
-  console.log('DEBUG: GL_VENDOR:', gpuInfo.glVendor);
-  console.log('DEBUG: GL_RENDERER:', gpuInfo.glRenderer);
-  console.log('DEBUG: chrome://gpu preview:', gpuInfo.preview.substring(0, 500));
+  try {
+    // Listen for console messages
+    page.on('console', msg => console.log('BROWSER:', msg.type(), msg.text()));
+    page.on('pageerror', err => console.log('BROWSER ERROR:', err.message));
+
+    await page.goto('chrome://gpu', { timeout: 30000, waitUntil: 'networkidle' });
+
+    // Wait for content to load (chrome://gpu can be slow)
+    await page.waitForTimeout(3000);
+
+    const gpuInfo = await page.evaluate(() => {
+      const body = document.body?.innerText || 'BODY NOT FOUND';
+      // Try different selectors
+      const featureStatus = document.querySelector('.feature-status');
+      const featureStatusText = featureStatus?.innerText || '';
+
+      const webgpuMatch = body.match(/WebGPU[:\s]*(.*?)[\n\r]/i) || featureStatusText.match(/WebGPU[:\s]*(.*?)[\n\r]/i);
+      const vulkanMatch = body.match(/Vulkan[:\s]*(.*?)[\n\r]/i) || featureStatusText.match(/Vulkan[:\s]*(.*?)[\n\r]/i);
+      const driverMatch = body.match(/GL_VENDOR[:\s]*(.*?)[\n\r]/i);
+      const rendererMatch = body.match(/GL_RENDERER[:\s]*(.*?)[\n\r]/i);
+
+      return {
+        webgpu: webgpuMatch ? webgpuMatch[1].trim() : 'not found',
+        vulkan: vulkanMatch ? vulkanMatch[1].trim() : 'not found',
+        glVendor: driverMatch ? driverMatch[1].trim() : 'not found',
+        glRenderer: rendererMatch ? rendererMatch[1].trim() : 'not found',
+        bodyLength: body.length,
+        preview: body.substring(0, 800)
+      };
+    });
+    console.log('DEBUG: Page body length:', gpuInfo.bodyLength);
+    console.log('DEBUG: WebGPU status:', gpuInfo.webgpu);
+    console.log('DEBUG: Vulkan status:', gpuInfo.vulkan);
+    console.log('DEBUG: GL_VENDOR:', gpuInfo.glVendor);
+    console.log('DEBUG: GL_RENDERER:', gpuInfo.glRenderer);
+    if (gpuInfo.bodyLength < 100) {
+      console.log('DEBUG: chrome://gpu page appears empty or failed to load');
+    }
+    console.log('DEBUG: chrome://gpu preview:', gpuInfo.preview.substring(0, 500));
+  } catch (e) {
+    console.log('DEBUG: Error loading chrome://gpu:', e.message);
+  }
 
   // Now check navigator.gpu directly on blank page
   await page.goto('about:blank', { timeout: 10000 });
