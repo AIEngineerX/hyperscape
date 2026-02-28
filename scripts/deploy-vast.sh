@@ -519,6 +519,7 @@ try {
   console.log('DEBUG: Starting browser launch...');
   console.log('DEBUG: executablePath =', executablePath);
   console.log('DEBUG: DISPLAY =', process.env.DISPLAY);
+  console.log('DEBUG: VK_ICD_FILENAMES =', process.env.VK_ICD_FILENAMES);
   console.log('DEBUG: args =', args.join(' '));
 
   const launchOpts = {
@@ -526,6 +527,12 @@ try {
     args,
     // Prevent Playwright from adding SwiftShader which conflicts with GPU rendering
     ignoreDefaultArgs: ['--enable-unsafe-swiftshader'],
+    // Pass critical GPU environment variables to Chrome
+    env: {
+      ...process.env,
+      VK_ICD_FILENAMES: process.env.VK_ICD_FILENAMES || '/usr/share/vulkan/icd.d/nvidia_icd.json',
+      LIBGL_ALWAYS_SOFTWARE: '0',  // Force hardware GPU
+    },
   };
   if (executablePath) {
     launchOpts.executablePath = executablePath;
@@ -545,14 +552,23 @@ try {
     const body = document.body.innerText;
     const webgpuMatch = body.match(/WebGPU[:\s]*(.*?)[\n\r]/i);
     const vulkanMatch = body.match(/Vulkan[:\s]*(.*?)[\n\r]/i);
+    // Look for GPU driver info
+    const driverMatch = body.match(/GL_VENDOR[:\s]*(.*?)[\n\r]/i);
+    const rendererMatch = body.match(/GL_RENDERER[:\s]*(.*?)[\n\r]/i);
     return {
       webgpu: webgpuMatch ? webgpuMatch[1].trim() : 'not found',
       vulkan: vulkanMatch ? vulkanMatch[1].trim() : 'not found',
-      preview: body.substring(0, 500)
+      glVendor: driverMatch ? driverMatch[1].trim() : 'not found',
+      glRenderer: rendererMatch ? rendererMatch[1].trim() : 'not found',
+      // Get first 1000 chars to see what's on the page
+      preview: body.substring(0, 1000)
     };
   });
-  console.log('DEBUG: WebGPU status from chrome://gpu:', gpuInfo.webgpu);
-  console.log('DEBUG: Vulkan status from chrome://gpu:', gpuInfo.vulkan);
+  console.log('DEBUG: WebGPU status:', gpuInfo.webgpu);
+  console.log('DEBUG: Vulkan status:', gpuInfo.vulkan);
+  console.log('DEBUG: GL_VENDOR:', gpuInfo.glVendor);
+  console.log('DEBUG: GL_RENDERER:', gpuInfo.glRenderer);
+  console.log('DEBUG: chrome://gpu preview:', gpuInfo.preview.substring(0, 500));
 
   // Now check navigator.gpu directly on blank page
   await page.goto('about:blank', { timeout: 10000 });
