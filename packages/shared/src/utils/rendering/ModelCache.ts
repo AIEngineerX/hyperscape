@@ -1767,10 +1767,35 @@ export class ModelCache {
   }
 
   /**
+   * Dispose all geometries in a scene (but NOT materials - they're managed)
+   * @private
+   */
+  private disposeSceneGeometries(scene: THREE.Object3D): void {
+    scene.traverse((child) => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.SkinnedMesh) {
+        if (child.geometry) {
+          child.geometry.dispose();
+        }
+      }
+    });
+  }
+
+  /**
    * Clear the cache (useful for hot reload)
    * Should be called when code is rebuilt to prevent stale Hyperscape Nodes
+   * IMPORTANT: Disposes geometries to prevent GPU memory leaks
    */
   clear(): void {
+    // Dispose all cached model geometries before clearing
+    for (const [, model] of this.cache) {
+      this.disposeSceneGeometries(model.scene);
+      // Dispose LOD bundle geometries if present
+      if (model.lodBundle) {
+        model.lodBundle.lod0?.dispose();
+        model.lodBundle.lod1?.dispose();
+        model.lodBundle.lod2?.dispose();
+      }
+    }
     this.cache.clear();
     this.loading.clear();
   }
@@ -1785,8 +1810,19 @@ export class ModelCache {
 
   /**
    * Remove a specific model from cache
+   * IMPORTANT: Disposes geometries to prevent GPU memory leaks
    */
   remove(path: string): boolean {
+    const model = this.cache.get(path);
+    if (model) {
+      this.disposeSceneGeometries(model.scene);
+      // Dispose LOD bundle geometries if present
+      if (model.lodBundle) {
+        model.lodBundle.lod0?.dispose();
+        model.lodBundle.lod1?.dispose();
+        model.lodBundle.lod2?.dispose();
+      }
+    }
     return this.cache.delete(path);
   }
 

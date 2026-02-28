@@ -2837,6 +2837,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.spatialIndex.destroy();
     this.saveManager.destroy();
     this.interactionSessionManager.destroy();
+    this.eventBridge.destroy();
     this.tickSystem.stop();
 
     for (const [_id, socket] of this.sockets) {

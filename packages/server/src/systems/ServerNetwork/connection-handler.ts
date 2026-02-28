@@ -391,6 +391,9 @@ export class ConnectionHandler {
     let authCompleted = false; // Guard against race conditions
     let isCleanedUp = false; // Prevent double cleanup
 
+    // Error handler defined early so cleanup can reference it
+    let errorHandler: ((err: Error) => void) | null = null;
+
     /**
      * SECURITY: Cleanup function to remove listeners and clear timeout.
      * Must be called from all exit paths to prevent resource leaks.
@@ -402,6 +405,9 @@ export class ConnectionHandler {
       try {
         ws.removeListener?.("message", messageHandler);
         ws.removeListener?.("close", closeHandler);
+        if (errorHandler) {
+          ws.removeListener?.("error", errorHandler);
+        }
       } catch {
         // Ignore errors during cleanup (socket may be closing)
       }
@@ -617,12 +623,13 @@ export class ConnectionHandler {
       cleanup();
     };
 
-    // Register error handler
-    ws.on("error", (err: Error) => {
+    // Error handler (assigned to variable defined earlier for cleanup)
+    errorHandler = (err: Error) => {
       console.error("[ConnectionHandler] WebSocket error during auth:", err);
-    });
+    };
 
-    // Register message and close handlers
+    // Register message, close, and error handlers
+    ws.on("error", errorHandler);
     ws.on("message", messageHandler);
     ws.on("close", closeHandler);
 

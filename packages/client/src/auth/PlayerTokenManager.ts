@@ -203,8 +203,17 @@ export class PlayerTokenManager extends EventEmitter {
     this.saveSession(this.currentSession);
     this.emit("session-ended", this.currentSession);
 
+    this.stopHeartbeat();
+  }
+
+  /**
+   * Stop the heartbeat interval
+   * @private
+   */
+  private stopHeartbeat(): void {
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
     }
   }
 
@@ -253,6 +262,9 @@ export class PlayerTokenManager extends EventEmitter {
    * @public
    */
   clearStoredData(): void {
+    // Stop heartbeat before clearing data to prevent memory leak
+    this.stopHeartbeat();
+
     localStorage.removeItem(PlayerTokenManager.STORAGE_KEY);
     localStorage.removeItem(PlayerTokenManager.SESSION_KEY);
 
