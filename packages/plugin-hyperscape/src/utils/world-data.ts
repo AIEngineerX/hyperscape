@@ -29,12 +29,26 @@ interface FoodEntry {
   healAmount: number;
 }
 
+export interface MonsterTier {
+  id: string;
+  name: string;
+  level: number;
+  location: string;
+}
+
+export interface GearTier {
+  tierName: string;
+  levelRequired: number;
+  smithingLevel: number;
+}
+
 interface ManifestCache {
   woodcutting: ResourceEntry[] | null;
   mining: ResourceEntry[] | null;
   fishing: ResourceEntry[] | null;
   food: FoodEntry[] | null;
   bankPosition: [number, number, number] | null;
+  monsters: MonsterTier[] | null;
   loaded: boolean;
 }
 
@@ -48,6 +62,7 @@ const cache: ManifestCache = {
   fishing: null,
   food: null,
   bankPosition: null,
+  monsters: null,
   loaded: false,
 };
 
@@ -147,18 +162,20 @@ function ensureLoaded(): void {
       }));
     }
 
+    // World areas — used for bank position + mob spawn locations
+    interface WorldArea {
+      npcs?: Array<{
+        type: string;
+        position: { x: number; y: number; z: number };
+      }>;
+      mobSpawns?: Array<{ mobId: string }>;
+    }
+    const wa = readJSON(path.join(dir, "world-areas.json")) as Record<
+      string,
+      Record<string, WorldArea>
+    > | null;
+
     // Bank position — first bank NPC in starter town
-    const wa = readJSON(path.join(dir, "world-areas.json")) as {
-      starterTowns?: Record<
-        string,
-        {
-          npcs?: Array<{
-            type: string;
-            position: { x: number; y: number; z: number };
-          }>;
-        }
-      >;
-    } | null;
     if (wa?.starterTowns) {
       for (const town of Object.values(wa.starterTowns)) {
         const bankNpc = town.npcs?.find((n) => n.type === "bank");
@@ -173,8 +190,50 @@ function ensureLoaded(): void {
       }
     }
 
+    // Monster tiers — load from npcs.json + map locations from world-areas.json
+    const npcs = readJSON(path.join(dir, "npcs.json")) as Array<{
+      id: string;
+      name: string;
+      category?: string;
+      stats?: { level?: number };
+    }> | null;
+
+    if (npcs) {
+      // Build mob→location mapping from world-areas.json mob spawns
+      const mobLocationMap = new Map<string, string>();
+      if (wa) {
+        // Known area-key → planner location mappings
+        const areaLocationMap: Record<string, string> = {
+          central_haven: "spawn",
+        };
+        for (const areaGroup of Object.values(wa)) {
+          if (typeof areaGroup !== "object" || areaGroup === null) continue;
+          for (const [areaKey, area] of Object.entries(areaGroup)) {
+            if (!area?.mobSpawns) continue;
+            const location = areaLocationMap[areaKey] || areaKey;
+            for (const spawn of area.mobSpawns) {
+              // First area wins (most accessible location for that mob)
+              if (!mobLocationMap.has(spawn.mobId)) {
+                mobLocationMap.set(spawn.mobId, location);
+              }
+            }
+          }
+        }
+      }
+
+      cache.monsters = npcs
+        .filter((n) => n.category === "mob")
+        .map((n) => ({
+          id: n.id,
+          name: n.name,
+          level: n.stats?.level ?? 1,
+          location: mobLocationMap.get(n.id) || "spawn",
+        }))
+        .sort((a, b) => a.level - b.level);
+    }
+
     logger.info(
-      `[WorldData] Loaded manifests: ${cache.woodcutting?.length ?? 0} trees, ${cache.mining?.length ?? 0} rocks, ${cache.fishing?.length ?? 0} fishing spots, ${cache.food?.length ?? 0} food items, bank=${cache.bankPosition ? "yes" : "no"}`,
+      `[WorldData] Loaded manifests: ${cache.woodcutting?.length ?? 0} trees, ${cache.mining?.length ?? 0} rocks, ${cache.fishing?.length ?? 0} fishing spots, ${cache.food?.length ?? 0} food items, ${cache.monsters?.length ?? 0} monsters, bank=${cache.bankPosition ? "yes" : "no"}`,
     );
   } catch (err) {
     logger.warn(
@@ -229,4 +288,73 @@ export function getFoodHealAmount(itemName: string): number {
       lower.includes(f.id.toLowerCase()),
   );
   return match?.healAmount ?? 0;
+}
+
+/**
+ * Get all monster tiers sorted by level ascending.
+ */
+export function getMonsterTiers(): MonsterTier[] {
+  ensureLoaded();
+  return cache.monsters ?? [];
+}
+
+/**
+ * Get the best monster for a given combat level.
+ * Returns the highest-level monster where monster.level <= combatLevel + maxAbove.
+ * Falls back to the lowest-level monster (goblin).
+ */
+export function getMonsterForCombatLevel(
+  combatLevel: number,
+  maxAbove: number = 3,
+): MonsterTier {
+  ensureLoaded();
+
+  const monsters = cache.monsters;
+  if (!monsters || monsters.length === 0) {
+    return { id: "goblin", name: "Goblin", level: 2, location: "spawn" };
+  }
+
+  // Find the highest-level monster the agent can reasonably fight
+  const ceiling = combatLevel + maxAbove;
+  let best = monsters[0]; // lowest level fallback
+  for (const m of monsters) {
+    if (m.level <= ceiling) {
+      best = m;
+    }
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------------------
+// Gear tiers (static — derived from tier-requirements.json)
+// ---------------------------------------------------------------------------
+
+const GEAR_TIERS: GearTier[] = [
+  { tierName: "bronze", levelRequired: 1, smithingLevel: 1 },
+  { tierName: "iron", levelRequired: 1, smithingLevel: 15 },
+  { tierName: "steel", levelRequired: 5, smithingLevel: 30 },
+  { tierName: "mithril", levelRequired: 20, smithingLevel: 50 },
+  { tierName: "adamant", levelRequired: 30, smithingLevel: 70 },
+  { tierName: "rune", levelRequired: 40, smithingLevel: 85 },
+];
+
+/**
+ * Get all gear tiers sorted by levelRequired ascending.
+ */
+export function getGearTiers(): GearTier[] {
+  return GEAR_TIERS;
+}
+
+/**
+ * Get the best gear tier the player can equip at a given attack level.
+ * Returns the highest tier where levelRequired <= attackLevel.
+ */
+export function getBestEquippableTier(attackLevel: number): GearTier {
+  let best = GEAR_TIERS[0];
+  for (const tier of GEAR_TIERS) {
+    if (tier.levelRequired <= attackLevel) {
+      best = tier;
+    }
+  }
+  return best;
 }

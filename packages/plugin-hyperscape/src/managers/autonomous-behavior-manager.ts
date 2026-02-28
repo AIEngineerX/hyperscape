@@ -80,7 +80,10 @@ import {
   bankDepositAllAction,
 } from "../actions/banking.js";
 import { moveToAction } from "../actions/movement.js";
-import { KNOWN_LOCATIONS } from "../providers/goalProvider.js";
+import {
+  KNOWN_LOCATIONS,
+  updateKnownLocationsFromNearbyEntities,
+} from "../providers/goalProvider.js";
 import { SCRIPTED_AUTONOMY_CONFIG } from "../config/constants.js";
 import {
   hasCombatCapableItem,
@@ -924,6 +927,16 @@ export class AutonomousBehaviorManager {
     const shortCircuit = this.tryShortCircuit();
     if (shortCircuit) {
       logger.info(`[AutonomousBehavior] Short-circuit: ${shortCircuit.name}`);
+
+      // Sync short-circuit decisions as thoughts so the dashboard shows activity
+      // for agents that rarely/never reach the LLM path.
+      const goal = this.currentGoal;
+      const thought = goal
+        ? `[${goal.type}] ${goal.description} → ${shortCircuit.name}`
+        : `→ ${shortCircuit.name}`;
+      this.lastThinking = thought;
+      this.syncThinkingToDashboard(thought);
+
       return shortCircuit;
     }
 
@@ -966,6 +979,16 @@ export class AutonomousBehaviorManager {
       let selectedActionName = actionName;
 
       if (!selectedActionName) {
+        // If there's an active goal, don't derail it — retry next tick
+        if (this.currentGoal) {
+          logger.warn(
+            "[AutonomousBehavior] Could not parse LLM action — retrying goal next tick",
+          );
+          this.lastThinking = `LLM unclear — retrying goal: ${this.currentGoal.description}`;
+          this.syncThinkingToDashboard(this.lastThinking);
+          this.nextTickFast = true;
+          return null;
+        }
         logger.warn(
           "[AutonomousBehavior] Could not parse action from LLM response, defaulting to EXPLORE",
         );
@@ -999,6 +1022,17 @@ export class AutonomousBehaviorManager {
         "[AutonomousBehavior] Error selecting action:",
         error instanceof Error ? error.message : String(error),
       );
+
+      // If the agent has an active goal, don't override it with explore —
+      // return null to idle this tick and retry the short-circuit next tick.
+      // This prevents LLM errors (e.g. rate limits) from derailing goal progress.
+      if (this.currentGoal) {
+        this.lastThinking = `LLM error — retrying goal: ${this.currentGoal.description}`;
+        this.syncThinkingToDashboard(this.lastThinking);
+        this.nextTickFast = true;
+        return null;
+      }
+
       this.lastThinking = "Error occurred - exploring as fallback";
       this.syncThinkingToDashboard(this.lastThinking);
       return exploreAction;
@@ -1441,13 +1475,12 @@ export class AutonomousBehaviorManager {
       // This will be displayed in the agent dashboard
       this.service.syncThoughtsToServer(thinking);
     } catch (error) {
-      // Non-critical - just log and continue
-      if (this.debug) {
-        logger.debug(
-          "[AutonomousBehavior] Could not sync thinking to dashboard:",
-          error instanceof Error ? error.message : String(error),
-        );
-      }
+      // Non-critical but worth logging so we can see which agents can't
+      // reach the server (typically "Not connected to Hyperscape server").
+      logger.warn(
+        "[AutonomousBehavior] Could not sync thinking to dashboard:",
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
 
@@ -1532,6 +1565,51 @@ export class AutonomousBehaviorManager {
         this.clearGoal();
         // clearGoal() now chains via planner, fast tick requested there
         return null;
+      }
+    }
+
+    // 2.1. Quest goal status change detection — re-plan when the quest's
+    // server-side status evolves past what the goal was targeting.
+    //   - Accept goal + quest now in_progress → Phase 3 continues it
+    //   - In-progress goal + quest now ready_to_complete → Phase 2 turns it in
+    //   - Turn-in goal + quest now completed → planner picks next goal
+    if (goal.type === "questing" && goal.questId) {
+      const quests = this.service?.getQuestState?.() || [];
+      const quest = quests.find(
+        (q: { questId?: string }) => q.questId === goal.questId,
+      );
+      const currentStatus = quest?.status;
+      const isAcceptGoal = goal.description?.startsWith("Accept quest:");
+      const isTurnInGoal = goal.description?.startsWith("Turn in quest:");
+
+      if (
+        // Accept goal → quest is now active or done
+        (isAcceptGoal && currentStatus && currentStatus !== "not_started") ||
+        // In-progress goal → quest stage complete, ready to turn in
+        (!isAcceptGoal &&
+          !isTurnInGoal &&
+          currentStatus === "ready_to_complete") ||
+        // Any non-accept goal → quest completed
+        (!isAcceptGoal && currentStatus === "completed")
+      ) {
+        logger.info(
+          `[AutonomousBehavior] Quest ${goal.questId} status → ${currentStatus} — re-planning`,
+        );
+        this.clearGoal();
+        return null;
+      }
+    }
+
+    // 2.5. Stale exploration invalidation — if the planner set exploration because
+    // quest data wasn't loaded yet, re-evaluate now that data may have arrived.
+    if (goal.type === "exploration") {
+      const quests = this.service?.getQuestState?.() || [];
+      if (quests.length > 0) {
+        logger.info(
+          "[AutonomousBehavior] Quest data arrived while exploring — re-evaluating goal",
+        );
+        this.clearGoal();
+        return null; // clearGoal chains into tryPlannerGoal, next tick acts on new goal
       }
     }
 
@@ -1716,6 +1794,24 @@ export class AutonomousBehaviorManager {
       }
     }
 
+    // 5.5. Goal requires travel to a known destination → NAVIGATE_TO directly
+    // Prevents wasting LLM ticks on EXPLORE when the agent already knows where to go
+    if (
+      this.lastActionName !== "NAVIGATE_TO" &&
+      !player.inCombat &&
+      this.shouldNavigateToGoal(goal, player)
+    ) {
+      const navigateAction =
+        this.getAvailableActions().find((a) => a.name === "NAVIGATE_TO") ||
+        null;
+      if (navigateAction) {
+        logger.info(
+          `[AutonomousBehavior] Short-circuit: goal "${goal.type}" requires travel — NAVIGATE_TO`,
+        );
+        return navigateAction;
+      }
+    }
+
     // 6. Last action was NAVIGATE_TO and succeeded → check if arrived, then act
     if (
       this.lastActionName === "NAVIGATE_TO" &&
@@ -1728,6 +1824,22 @@ export class AutonomousBehaviorManager {
         );
         return goalAction;
       }
+
+      // getGoalActionOnArrival returned null — but we may actually be near matching resources
+      // (e.g., fishing spots nearby but resolveCurrentGoalTarget couldn't find the exact position).
+      // Check for nearby resources before blindly re-issuing NAVIGATE_TO.
+      const nearbyEntities = this.service?.getNearbyEntities() || [];
+      const nearbyResourceAction = this.getResourceActionForGoal(
+        goal,
+        nearbyEntities,
+      );
+      if (nearbyResourceAction) {
+        logger.info(
+          `[AutonomousBehavior] Post-NAVIGATE_TO: resources found nearby — ${nearbyResourceAction.name}`,
+        );
+        return nearbyResourceAction;
+      }
+
       // Not arrived yet — keep navigating
       return (
         this.getAvailableActions().find((a) => a.name === "NAVIGATE_TO") || null
@@ -1769,6 +1881,74 @@ export class AutonomousBehaviorManager {
       }
     }
 
+    // 8. Goal-action enforcement — prevent the LLM from going rogue.
+    // If we have a clear goal, select the appropriate action deterministically
+    // instead of letting the LLM pick ATTACK_ENTITY during a questing goal.
+    if (!player.inCombat) {
+      const actions = this.getAvailableActions();
+      const find = (name: string) =>
+        actions.find((a) => a.name === name) || null;
+
+      switch (goal.type) {
+        case "combat_training": {
+          // Attack mobs in the area
+          const mob = find("ATTACK_ENTITY");
+          if (mob) return mob;
+          break;
+        }
+        case "questing": {
+          // Determine quest-appropriate action based on stage type
+          if (goal.questStageType === "kill") {
+            const attack = find("ATTACK_ENTITY");
+            if (attack) return attack;
+          } else {
+            // For non-kill quests (dialogue, gather, interact, accept),
+            // navigate to the quest location — never attack random mobs
+            const nav = find("NAVIGATE_TO");
+            if (nav) return nav;
+          }
+          break;
+        }
+        case "cooking": {
+          const cook = find("COOK_FOOD");
+          if (cook) return cook;
+          break;
+        }
+        case "smithing": {
+          if (goal.location === "furnace") {
+            const smelt = find("SMELT_ORE");
+            if (smelt) return smelt;
+          } else {
+            const smith = find("SMITH_ITEM");
+            if (smith) return smith;
+          }
+          break;
+        }
+        case "banking": {
+          const bank = find("NAVIGATE_TO");
+          if (bank) return bank;
+          break;
+        }
+        case "fishing": {
+          const fish = find("CATCH_FISH");
+          if (fish) return fish;
+          break;
+        }
+        case "woodcutting": {
+          const chop = find("CHOP_TREE");
+          if (chop) return chop;
+          break;
+        }
+        case "mining": {
+          const mine = find("MINE_ROCK");
+          if (mine) return mine;
+          break;
+        }
+        default:
+          break; // exploration, idle → let LLM decide
+      }
+    }
+
     return null; // No short-circuit — use LLM
   }
 
@@ -1800,6 +1980,11 @@ export class AutonomousBehaviorManager {
       logger.info(
         `[AutonomousBehavior] Planner set goal: ${plan.goal.type} — ${plan.reason}`,
       );
+
+      // Sync planner reasoning as thinking to the dashboard so agents
+      // show activity even when LLM calls fail on subsequent ticks
+      this.lastThinking = `Goal: ${plan.goal.description} (${plan.reason})`;
+      this.syncThinkingToDashboard(this.lastThinking);
 
       // If it's a quest accept, send the accept packet
       if (
@@ -2079,8 +2264,47 @@ export class AutonomousBehaviorManager {
         return null;
       case "cooking":
         return find("COOK_FOOD");
-      case "questing":
-        return null; // Let existing quest-specific logic handle
+      case "questing": {
+        // Check quest state to determine if ready to turn in
+        const questState = this.service?.getQuestState?.() || [];
+        const activeQuest = questState.find(
+          (q: { questId?: string; id?: string; status?: string }) =>
+            q.questId === goal.questId || q.id === goal.questId,
+        ) as { status?: string } | undefined;
+
+        if (activeQuest?.status === "ready_to_complete")
+          return find("COMPLETE_QUEST");
+        if (!goal.questStageType) return find("ACCEPT_QUEST");
+
+        switch (goal.questStageType) {
+          case "kill":
+            return find("ATTACK_ENTITY");
+          case "dialogue":
+            return find("TALK_TO_NPC");
+          case "gather": {
+            const target = (goal.questStageTarget || "").toLowerCase();
+            if (target.includes("log") || target.includes("wood"))
+              return find("CHOP_TREE");
+            if (target.includes("ore")) return find("MINE_ROCK");
+            if (target.includes("fish") || target.includes("shrimp"))
+              return find("CATCH_FISH");
+            return null;
+          }
+          case "interact": {
+            const iTarget = (goal.questStageTarget || "").toLowerCase();
+            if (iTarget.includes("smelt") || iTarget.includes("furnace"))
+              return find("SMELT_ORE");
+            if (iTarget.includes("smith") || iTarget.includes("anvil"))
+              return find("SMITH_ITEM");
+            if (iTarget.includes("cook") || iTarget.includes("range"))
+              return find("COOK_FOOD");
+            if (iTarget.includes("fire")) return find("LIGHT_FIRE");
+            return find("TALK_TO_NPC");
+          }
+          default:
+            return null;
+        }
+      }
       default:
         return null;
     }
@@ -2088,17 +2312,161 @@ export class AutonomousBehaviorManager {
 
   /**
    * Resolve the target position for the current goal.
-   * Checks goal.targetPosition first, then KNOWN_LOCATIONS.
+   * Updates KNOWN_LOCATIONS from nearby entities, then checks
+   * goal.targetPosition, KNOWN_LOCATIONS, and quest-specific lookups.
    */
   private resolveCurrentGoalTarget(
     goal: CurrentGoal,
   ): [number, number, number] | null {
     if (goal.targetPosition) return goal.targetPosition;
+
+    // Ensure KNOWN_LOCATIONS has latest positions from nearby entities
+    if (this.service) {
+      updateKnownLocationsFromNearbyEntities(this.service);
+    }
+
     if (goal.location) {
       const loc = KNOWN_LOCATIONS[goal.location];
       if (loc?.position) return loc.position;
     }
+
+    // Questing fallback: resolve via questStartNpc or quest stage location
+    if (goal.type === "questing") {
+      if (goal.questStartNpc) {
+        const npcLoc = KNOWN_LOCATIONS[goal.questStartNpc];
+        if (npcLoc?.position) return npcLoc.position;
+      }
+      const stagePos = this.resolveQuestStageLocation(
+        goal.questStageType,
+        goal.questStageTarget,
+      );
+      if (stagePos) return stagePos;
+    }
+
     return null;
+  }
+
+  /**
+   * Map quest stage type + target to a known area position.
+   */
+  private resolveQuestStageLocation(
+    stageType?: string,
+    stageTarget?: string,
+  ): [number, number, number] | null {
+    if (!stageType || !stageTarget) return null;
+    const target = stageTarget.toLowerCase();
+    let areaKey: string | null = null;
+
+    if (stageType === "kill") {
+      areaKey = "spawn";
+    } else if (stageType === "gather") {
+      if (target.includes("log") || target.includes("wood")) areaKey = "forest";
+      else if (target.includes("ore")) areaKey = "mine";
+      else if (target.includes("fish") || target.includes("shrimp"))
+        areaKey = "fishing";
+    } else if (stageType === "interact") {
+      if (target.includes("smelt") || target.includes("furnace"))
+        areaKey = "furnace";
+      else if (target.includes("smith") || target.includes("anvil"))
+        areaKey = "anvil";
+    }
+
+    if (areaKey) {
+      const loc = KNOWN_LOCATIONS[areaKey];
+      if (loc?.position) return loc.position;
+    }
+    return null;
+  }
+
+  /**
+   * Check if the current goal requires travel to a known destination
+   * that is > 15 units away. Skips if nearby resources already match the goal.
+   */
+  private shouldNavigateToGoal(
+    goal: CurrentGoal,
+    player: PlayerEntity,
+  ): boolean {
+    // Resolve a target position for this goal
+    const targetPos = this.resolveCurrentGoalTarget(goal);
+    if (!targetPos) return false;
+
+    // Check distance — only navigate if far away
+    const dist = this.getDistance2D(player.position, targetPos);
+    if (dist === null || dist <= 15) return false;
+
+    // If the goal is a resource-gathering type, check if matching resources are already nearby
+    const entities = this.service?.getNearbyEntities() || [];
+    const resourceGoalTypes = ["woodcutting", "fishing", "mining"];
+    if (resourceGoalTypes.includes(goal.type)) {
+      if (this.hasNearbyResourcesForGoal(goal.type, entities)) return false;
+    }
+
+    // For questing kill goals, check if combat targets are already nearby
+    if (goal.type === "questing" && goal.questStageType === "kill") {
+      if (this.hasNearbyResourcesForGoal("combat_training", entities))
+        return false;
+      // Also check for any attackable entities nearby
+      const hasTarget = entities.some((e) => {
+        const type = (e.type || "").toLowerCase();
+        return type === "mob" || type === "npc" || type === "monster";
+      });
+      if (hasTarget) return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Map a goal type to the appropriate resource action when matching resources are nearby.
+   * Returns null if no matching resources or goal type has no resource action.
+   */
+  private getResourceActionForGoal(
+    goal: CurrentGoal,
+    entities: Array<{
+      name?: string;
+      resourceType?: string;
+      type?: string;
+      depleted?: boolean;
+    }>,
+  ): Action | null {
+    const goalTypeToAction: Record<string, string> = {
+      woodcutting: "CHOP_TREE",
+      fishing: "CATCH_FISH",
+      mining: "MINE_ROCK",
+      combat_training: "ATTACK_ENTITY",
+    };
+
+    // For questing goals, map stage type to resource type
+    let effectiveGoalType: string = goal.type;
+    if (goal.type === "questing" && goal.questStageType) {
+      const stageMap: Record<string, string> = {
+        kill: "combat_training",
+        gather: this.questStageTargetToGoalType(goal.questStageTarget),
+      };
+      effectiveGoalType = stageMap[goal.questStageType] || goal.type;
+    }
+
+    const actionName = goalTypeToAction[effectiveGoalType];
+    if (!actionName) return null;
+
+    if (!this.hasNearbyResourcesForGoal(effectiveGoalType, entities))
+      return null;
+
+    return (
+      this.getAvailableActions().find((a) => a.name === actionName) || null
+    );
+  }
+
+  /**
+   * Map quest stage target text to an effective goal type for resource matching.
+   */
+  private questStageTargetToGoalType(target?: string): string {
+    if (!target) return "";
+    const t = target.toLowerCase();
+    if (t.includes("log") || t.includes("wood")) return "woodcutting";
+    if (t.includes("ore")) return "mining";
+    if (t.includes("fish") || t.includes("shrimp")) return "fishing";
+    return "";
   }
 
   /**

@@ -27,7 +27,12 @@ import {
   hasRawFood,
   countFood,
 } from "../utils/item-detection.js";
-import { getResourcesAtLevel } from "../utils/world-data.js";
+import {
+  getResourcesAtLevel,
+  getMonsterForCombatLevel,
+  getBestEquippableTier,
+} from "../utils/world-data.js";
+import { SCRIPTED_AUTONOMY_CONFIG } from "../config/constants.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -129,8 +134,70 @@ const GATHERING_SKILLS: Array<{
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Minimum food count before combat training is allowed */
+const COMBAT_FOOD_THRESHOLD = 10;
+
 function getSkillLevel(player: PlayerEntity, skill: string): number {
   return player.skills?.[skill]?.level ?? 1;
+}
+
+/**
+ * Approximate combat level (simple 5-stat average).
+ * Matches the formula used in the autonomous behavior manager.
+ */
+function getCombatLevel(player: PlayerEntity): number {
+  const s = player.skills;
+  if (!s) return 1;
+  return Math.floor(
+    ((s.attack?.level ?? 1) +
+      (s.strength?.level ?? 1) +
+      (s.defense?.level ?? 1) +
+      (s.constitution?.level ?? 1) +
+      (s.ranged?.level ?? 1)) /
+      5,
+  );
+}
+
+/**
+ * Rotate combat style: train whichever melee skill is lowest.
+ * Natural balancing — attack → strength → defense cycling.
+ */
+function pickCombatStyle(player: PlayerEntity): string {
+  const attack = getSkillLevel(player, "attack");
+  const strength = getSkillLevel(player, "strength");
+  const defense = getSkillLevel(player, "defense");
+
+  if (attack <= strength && attack <= defense) return "attack";
+  if (strength <= attack && strength <= defense) return "strength";
+  return "defense";
+}
+
+/**
+ * Extract the tier name from the player's equipped weapon.
+ * E.g. "bronze_longsword" → "bronze", "iron_scimitar" → "iron".
+ * Returns "none" if no weapon is equipped.
+ */
+function getEquippedWeaponTier(player: PlayerEntity): string {
+  const weapon = player.equipment?.weapon;
+  if (!weapon) return "none";
+
+  // weapon can be a string itemId OR an object {itemId: string, ...}
+  const weaponName =
+    typeof weapon === "string"
+      ? weapon
+      : (weapon as Record<string, unknown>).itemId
+        ? String((weapon as Record<string, unknown>).itemId)
+        : (weapon as Record<string, unknown>).name
+          ? String((weapon as Record<string, unknown>).name)
+          : "";
+  if (!weaponName) return "none";
+
+  const lower = weaponName.toLowerCase();
+  const tiers = ["rune", "adamant", "mithril", "steel", "iron", "bronze"];
+  for (const tier of tiers) {
+    if (lower.includes(tier)) return tier;
+  }
+  return "none";
 }
 
 function inventoryCount(player: PlayerEntity): number {
@@ -372,7 +439,51 @@ export function planNextGoal(ctx: PlannerContext): GoalPlan | null {
   }
 
   // ------------------------------------------------------------------
-  // Phase 5 — Process raw materials (ore/bars/raw food)
+  // Phase 4.5 — Gear upgrade: smith better equipment if possible
+  // ------------------------------------------------------------------
+  const attackLevel = getSkillLevel(player, "attack");
+  const bestTier = getBestEquippableTier(attackLevel);
+  const currentWeaponTier = getEquippedWeaponTier(player);
+  const smithingLevel = getSkillLevel(player, "smithing");
+
+  if (
+    bestTier.tierName !== currentWeaponTier &&
+    smithingLevel >= bestTier.smithingLevel
+  ) {
+    if (hasBars(player)) {
+      return {
+        goal: {
+          type: "smithing",
+          description: `Smith ${bestTier.tierName} equipment`,
+          target: 1,
+          progress: 0,
+          startedAt: Date.now(),
+          location: "anvil",
+          targetSkill: "smithing",
+          targetSkillLevel: smithingLevel + 1,
+        },
+        reason: `Can equip ${bestTier.tierName} gear (attack ${attackLevel}) and has bars + smithing ${smithingLevel}`,
+      };
+    }
+    if (hasOre(player)) {
+      return {
+        goal: {
+          type: "smithing",
+          description: `Smelt ore for ${bestTier.tierName} gear`,
+          target: 1,
+          progress: 0,
+          startedAt: Date.now(),
+          location: "furnace",
+          targetSkill: "smithing",
+          targetSkillLevel: smithingLevel + 1,
+        },
+        reason: `Smelting ore to prepare ${bestTier.tierName} gear upgrade`,
+      };
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Phase 5 — Process raw materials (ore/bars) when inventory is filling
   // ------------------------------------------------------------------
   if (inventoryCount(player) > 20) {
     if (hasOre(player)) {
@@ -405,20 +516,24 @@ export function planNextGoal(ctx: PlannerContext): GoalPlan | null {
         reason: "Has bars + inventory > 20 → smith",
       };
     }
-    if (hasRawFood(player)) {
-      return {
-        goal: {
-          type: "cooking",
-          description: "Cook raw food",
-          target: 1,
-          progress: 0,
-          startedAt: Date.now(),
-          targetSkill: "cooking",
-          targetSkillLevel: getSkillLevel(player, "cooking") + 1,
-        },
-        reason: "Has raw food + inventory > 20 → cook",
-      };
-    }
+  }
+
+  // ------------------------------------------------------------------
+  // Phase 5.5 — Cook raw food immediately (don't wait for inventory to fill)
+  // ------------------------------------------------------------------
+  if (hasRawFood(player) && hasTinderbox(player)) {
+    return {
+      goal: {
+        type: "cooking",
+        description: "Cook raw food",
+        target: 1,
+        progress: 0,
+        startedAt: Date.now(),
+        targetSkill: "cooking",
+        targetSkillLevel: getSkillLevel(player, "cooking") + 1,
+      },
+      reason: "Has raw food → cook immediately",
+    };
   }
 
   // ------------------------------------------------------------------
@@ -472,7 +587,7 @@ export function planNextGoal(ctx: PlannerContext): GoalPlan | null {
   // ------------------------------------------------------------------
   if (
     hasCombatCapableItem(player) &&
-    countFood(player) < 5 &&
+    countFood(player) < COMBAT_FOOD_THRESHOLD &&
     hasFishingEquipment(player)
   ) {
     return {
@@ -486,32 +601,45 @@ export function planNextGoal(ctx: PlannerContext): GoalPlan | null {
         targetSkill: "fishing",
         targetSkillLevel: getSkillLevel(player, "fishing") + 1,
       },
-      reason: `Food count ${countFood(player)} < 5 → fish for food`,
+      reason: `Food count ${countFood(player)} < ${COMBAT_FOOD_THRESHOLD} → fish for food`,
     };
   }
 
   // ------------------------------------------------------------------
-  // Phase 8 — Combat training
+  // Phase 8 — Combat training (dynamic monster + style rotation)
   // ------------------------------------------------------------------
-  if (hasCombatCapableItem(player) && countFood(player) >= 5) {
+  if (
+    hasCombatCapableItem(player) &&
+    countFood(player) >= COMBAT_FOOD_THRESHOLD
+  ) {
+    const combatLevel = getCombatLevel(player);
+    const monster = getMonsterForCombatLevel(
+      combatLevel,
+      SCRIPTED_AUTONOMY_CONFIG.MOB_LEVEL_MAX_ABOVE,
+    );
+    const skill = pickCombatStyle(player);
+
     return {
       goal: {
         type: "combat_training",
-        description: "Train combat on goblins",
+        description: `Train ${skill} on ${monster.name}s`,
         target: 1,
         progress: 0,
         startedAt: Date.now(),
-        location: "spawn",
-        targetSkill: "attack",
-        targetSkillLevel: getSkillLevel(player, "attack") + 1,
-        targetEntity: "goblin",
+        location: monster.location,
+        targetSkill: skill,
+        targetSkillLevel: getSkillLevel(player, skill) + 1,
+        targetEntity: monster.id,
       },
-      reason: `Has weapon + ${countFood(player)} food → combat training`,
+      reason: `Combat level ${combatLevel} → ${monster.name} (lvl ${monster.level}), training ${skill}`,
     };
   }
 
   // ------------------------------------------------------------------
   // Phase 9 — Fallback: explore
+  // If quests haven't loaded yet, exploration is still set but the ABM's
+  // stale-exploration invalidation (step 2.5) will clear it once quest
+  // data arrives and re-run the planner with real data.
   // ------------------------------------------------------------------
   return {
     goal: {

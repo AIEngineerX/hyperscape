@@ -1474,6 +1474,204 @@ export function registerAdminRoutes(
     },
   );
 
+  /**
+   * POST /admin/players/:playerId/reset
+   * Reset an agent's character to fresh-start state without tearing down the
+   * ElizaOS runtime.  This avoids the [PLUGIN:SQL] "Database is shutting down"
+   * errors that occur when runtime.stop() races against PGLite's async teardown.
+   *
+   * Approach: disconnect the game-facing service (WebSocket / entity), delete
+   * the character row (CASCADE clears all related tables atomically), insert a
+   * fresh row with schema defaults, then reconnect the service so the server
+   * loads the pristine data.  The ElizaOS runtime and PGLite stay untouched.
+   */
+  fastify.post<{ Params: { playerId: string } }>(
+    "/admin/players/:playerId/reset",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const ctx = getDb(reply);
+      if (!ctx) return;
+      const { db } = ctx;
+
+      const { playerId } = request.params;
+
+      // Verify character exists and grab identity fields we need to recreate it
+      const [character] = await db
+        .select({
+          id: schema.characters.id,
+          name: schema.characters.name,
+          accountId: schema.characters.accountId,
+          isAgent: schema.characters.isAgent,
+        })
+        .from(schema.characters)
+        .where(eq(schema.characters.id, playerId))
+        .limit(1);
+
+      if (!character) {
+        return reply.code(404).send({ error: "Character not found" });
+      }
+
+      const {
+        getAgentManager,
+        getRunningAgents,
+        getAgentRuntimeByCharacterId,
+      } = await import("../../eliza/index.js");
+
+      // ── Identify agent type ───────────────────────────────────────
+      let agentType: "model" | "embedded" | "none" = "none";
+
+      const runningModelAgents = getRunningAgents() as Map<
+        string,
+        {
+          characterId: string;
+          config: { provider: string; model: string; displayName: string };
+        }
+      >;
+      for (const [, agent] of runningModelAgents) {
+        if (agent.characterId === playerId) {
+          agentType = "model";
+          break;
+        }
+      }
+
+      const agentManager = getAgentManager();
+      if (agentType === "none" && agentManager?.hasAgent(playerId)) {
+        agentType = "embedded";
+      }
+
+      try {
+        // ── Step 1: Disconnect from the game world ──────────────────
+        // For model agents we only disconnect the HyperscapeService
+        // (behavior loop + WebSocket) while leaving the ElizaOS runtime
+        // and its PGLite database completely untouched.  This eliminates
+        // the [PLUGIN:SQL] shutdown race entirely.
+        if (agentType === "model") {
+          console.log(
+            `[AdminRoutes] Disconnecting model agent "${character.name}" for reset (runtime stays alive)...`,
+          );
+          const runtime = getAgentRuntimeByCharacterId(playerId);
+          if (runtime) {
+            try {
+              const service = runtime.getService("hyperscapeService") as {
+                stopAutonomousBehavior?: () => void;
+                disconnect?: () => Promise<void>;
+                connect?: (url: string) => Promise<void>;
+                startAutonomousBehavior?: () => void;
+                serverUrl?: string;
+              } | null;
+              // Stop LLM decision loop first, then disconnect WebSocket.
+              service?.stopAutonomousBehavior?.();
+              if (service?.disconnect) {
+                await service.disconnect();
+              }
+            } catch {
+              /* service may not exist or already disconnected */
+            }
+          }
+        } else if (agentType === "embedded") {
+          console.log(
+            `[AdminRoutes] Stopping embedded agent "${character.name}" for reset...`,
+          );
+          await agentManager!.stopAgent(playerId);
+        }
+
+        // Explicitly remove the entity from the world.  On disconnect
+        // the SocketManager starts a 30s reconnect grace period that
+        // keeps the OLD entity (with stale skills/inventory) alive.
+        // If the agent reconnects within that window, tryReconnect()
+        // reuses the old entity — so the DB reset is invisible.
+        // Removing it here forces a fresh entity + DB load on reconnect.
+        if (world.entities?.remove) {
+          world.entities.remove(playerId);
+        }
+
+        // ── Step 2: Delete and recreate the character ───────────────
+        //
+        // Entity removal triggers fire-and-forget async saves in several
+        // ECS systems (InventorySystem.cleanupInventory, CoinPouchSystem.
+        // cleanupPlayerCoins, EquipmentSystem PLAYER_LEFT handler).  These
+        // do `getPlayerAsync(id).then(row => save(...))` without awaiting.
+        //
+        // If we DELETE + INSERT atomically the async saves can race: they
+        // start before the DELETE, find no old row, then the INSERT runs,
+        // and the saves' .then() resolves against the NEW row — writing
+        // stale inventory/equipment/coins back.
+        //
+        // Fix: DELETE first so the async saves either fail (no row) or
+        // write to a row that's about to be gone.  Wait for them to
+        // drain, then INSERT the pristine row.
+        await db
+          .delete(schema.characters)
+          .where(eq(schema.characters.id, playerId));
+
+        // Let fire-and-forget saves from ECS cleanup handlers settle.
+        // They'll fail with "character not found" since the row is gone.
+        await new Promise((r) => setTimeout(r, 500));
+
+        await db.insert(schema.characters).values({
+          id: playerId,
+          accountId: character.accountId,
+          name: character.name,
+          isAgent: character.isAgent,
+          createdAt: Date.now(),
+        });
+
+        console.log(
+          `[AdminRoutes] Reset account for character "${character.name}" (${playerId}) — DELETE + INSERT`,
+        );
+
+        // ── Step 3: Reconnect to the game world ─────────────────────
+        // The server reloads all data from DB on connection (getPlayerAsync),
+        // so the agent will pick up the pristine character state.
+        if (agentType === "model") {
+          console.log(
+            `[AdminRoutes] Reconnecting model agent "${character.name}"...`,
+          );
+          const runtime = getAgentRuntimeByCharacterId(playerId);
+          if (runtime) {
+            try {
+              const service = runtime.getService("hyperscapeService") as {
+                connect?: (url: string) => Promise<void>;
+                startAutonomousBehavior?: () => void;
+                serverUrl?: string;
+              } | null;
+              if (service?.connect && service.serverUrl) {
+                await service.connect(service.serverUrl);
+              }
+              // Wait for the server to finish the spawn flow (load fresh
+              // data from DB, create entity, register with SkillsSystem).
+              // connect() resolves when the WebSocket opens, but the full
+              // character-selection handshake is async after that.
+              await new Promise((r) => setTimeout(r, 1500));
+              service?.startAutonomousBehavior?.();
+            } catch (reconnectErr) {
+              console.error(
+                `[AdminRoutes] Failed to reconnect model agent "${character.name}":`,
+                reconnectErr,
+              );
+            }
+          }
+        } else if (agentType === "embedded") {
+          console.log(
+            `[AdminRoutes] Respawning embedded agent "${character.name}"...`,
+          );
+          await agentManager!.startAgent(playerId).catch((err: unknown) => {
+            console.error(
+              `[AdminRoutes] Failed to respawn embedded agent "${character.name}":`,
+              err,
+            );
+          });
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+
+        return reply.send({ success: true, name: character.name });
+      } catch (err) {
+        console.error("[AdminRoutes] Reset account error:", err);
+        return reply.code(500).send({ error: "Failed to reset account" });
+      }
+    },
+  );
+
   /** GET /admin/stats - Dashboard statistics */
   fastify.get(
     "/admin/stats",
@@ -1513,6 +1711,360 @@ export function registerAdminRoutes(
         activeSessions: active[0]?.count ?? 0,
         bannedUsers: banned[0]?.count ?? 0,
       });
+    },
+  );
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Duel & Agent Control Endpoints
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * GET /admin/duels/status
+   * Live duel cycle, leaderboard, and recent duels for the duel dashboard.
+   */
+  fastify.get(
+    "/admin/duels/status",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const { getStreamingDuelScheduler } =
+          await import("../../systems/StreamingDuelScheduler/index.js");
+        const scheduler = getStreamingDuelScheduler();
+
+        if (!scheduler) {
+          return reply.send({
+            currentCycle: null,
+            leaderboard: [],
+            recentDuels: [],
+            streamHealth: null,
+          });
+        }
+
+        const cycle = scheduler.getCurrentCycle();
+        const leaderboard = scheduler.getLeaderboard();
+        const recentDuels = scheduler.getRecentDuels(20);
+
+        // Stream health: read from external RTMP status file if configured
+        let streamHealth: {
+          rtmpConnected: boolean;
+          viewerCount: number;
+        } | null = null;
+        const rtmpStatusFile = (process.env.RTMP_STATUS_FILE || "").trim();
+        if (rtmpStatusFile) {
+          try {
+            const fs = await import("fs");
+            const raw = fs.readFileSync(rtmpStatusFile, "utf8").trim();
+            if (raw) {
+              const parsed = JSON.parse(raw) as Record<string, unknown>;
+              if (
+                parsed &&
+                typeof parsed === "object" &&
+                Array.isArray(parsed.destinations)
+              ) {
+                const stats = parsed.stats as Record<string, unknown> | null;
+                streamHealth = {
+                  rtmpConnected: parsed.destinations.length > 0,
+                  viewerCount:
+                    typeof stats?.viewerCount === "number"
+                      ? stats.viewerCount
+                      : 0,
+                };
+              }
+            }
+          } catch {
+            /* RTMP status file not available */
+          }
+        }
+
+        // Map cycle to a simpler response shape
+        let currentCycle: {
+          phase: string;
+          contestants: Array<{
+            characterId: string;
+            name: string;
+            combatLevel: number;
+            currentHp: number;
+            maxHp: number;
+          }>;
+          startedAt: number;
+          phaseStartedAt: number;
+          winner: { characterId: string; name: string } | null;
+          winReason: string | null;
+        } | null = null;
+
+        if (cycle) {
+          const contestants: Array<{
+            characterId: string;
+            name: string;
+            combatLevel: number;
+            currentHp: number;
+            maxHp: number;
+          }> = [];
+          if (cycle.agent1) {
+            contestants.push({
+              characterId: cycle.agent1.characterId,
+              name: cycle.agent1.name,
+              combatLevel: cycle.agent1.combatLevel,
+              currentHp: cycle.agent1.currentHp,
+              maxHp: cycle.agent1.maxHp,
+            });
+          }
+          if (cycle.agent2) {
+            contestants.push({
+              characterId: cycle.agent2.characterId,
+              name: cycle.agent2.name,
+              combatLevel: cycle.agent2.combatLevel,
+              currentHp: cycle.agent2.currentHp,
+              maxHp: cycle.agent2.maxHp,
+            });
+          }
+
+          let winner: { characterId: string; name: string } | null = null;
+          if (cycle.winnerId) {
+            const winnerAgent =
+              cycle.agent1?.characterId === cycle.winnerId
+                ? cycle.agent1
+                : cycle.agent2;
+            if (winnerAgent) {
+              winner = {
+                characterId: winnerAgent.characterId,
+                name: winnerAgent.name,
+              };
+            }
+          }
+
+          currentCycle = {
+            phase: cycle.phase,
+            contestants,
+            startedAt: cycle.cycleStartTime,
+            phaseStartedAt: cycle.phaseStartTime,
+            winner,
+            winReason: cycle.winReason,
+          };
+        }
+
+        return reply.send({
+          currentCycle,
+          leaderboard,
+          recentDuels,
+          streamHealth,
+        });
+      } catch (err) {
+        console.error("[AdminRoutes] Duel status error:", err);
+        return reply.code(500).send({ error: "Failed to fetch duel status" });
+      }
+    },
+  );
+
+  /**
+   * Helper: find agent type and stop info for a characterId.
+   * Returns { agentType, modelProvider, modelModel, agentManager }.
+   */
+  async function resolveAgentType(characterId: string) {
+    const { getAgentManager, getRunningAgents } =
+      await import("../../eliza/index.js");
+
+    let agentType: "model" | "embedded" | "none" = "none";
+    let modelProvider: string | null = null;
+    let modelModel: string | null = null;
+
+    const runningModelAgents = getRunningAgents() as Map<
+      string,
+      {
+        characterId: string;
+        config: { provider: string; model: string; displayName: string };
+      }
+    >;
+    for (const [, agent] of runningModelAgents) {
+      if (agent.characterId === characterId) {
+        agentType = "model";
+        modelProvider = agent.config.provider;
+        modelModel = agent.config.model;
+        break;
+      }
+    }
+
+    const agentManager = getAgentManager();
+    if (agentType === "none" && agentManager?.hasAgent(characterId)) {
+      agentType = "embedded";
+    }
+
+    return { agentType, modelProvider, modelModel, agentManager };
+  }
+
+  /**
+   * POST /admin/agents/:characterId/pause
+   * Pause an agent's autonomous behavior without stopping the runtime.
+   */
+  fastify.post<{ Params: { characterId: string } }>(
+    "/admin/agents/:characterId/pause",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const { characterId } = request.params;
+
+      try {
+        const { agentType, agentManager } = await resolveAgentType(characterId);
+
+        if (agentType === "none") {
+          return reply.code(404).send({ error: "Agent not found" });
+        }
+
+        if (agentType === "model") {
+          const { getAgentRuntimeByCharacterId } =
+            await import("../../eliza/index.js");
+          const runtime = getAgentRuntimeByCharacterId(characterId);
+          if (runtime) {
+            const service = runtime.getService("hyperscapeService") as {
+              stopAutonomousBehavior?: () => void;
+            } | null;
+            service?.stopAutonomousBehavior?.();
+          }
+        } else if (agentType === "embedded" && agentManager) {
+          await agentManager.pauseAgent(characterId);
+        }
+
+        console.log(`[AdminRoutes] Paused agent ${characterId}`);
+        return reply.send({ success: true });
+      } catch (err) {
+        console.error("[AdminRoutes] Pause agent error:", err);
+        return reply.code(500).send({ error: "Failed to pause agent" });
+      }
+    },
+  );
+
+  /**
+   * POST /admin/agents/:characterId/resume
+   * Resume a paused agent's autonomous behavior.
+   */
+  fastify.post<{ Params: { characterId: string } }>(
+    "/admin/agents/:characterId/resume",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const { characterId } = request.params;
+
+      try {
+        const { agentType, agentManager } = await resolveAgentType(characterId);
+
+        if (agentType === "none") {
+          return reply.code(404).send({ error: "Agent not found" });
+        }
+
+        if (agentType === "model") {
+          const { getAgentRuntimeByCharacterId } =
+            await import("../../eliza/index.js");
+          const runtime = getAgentRuntimeByCharacterId(characterId);
+          if (runtime) {
+            const service = runtime.getService("hyperscapeService") as {
+              startAutonomousBehavior?: () => void;
+            } | null;
+            service?.startAutonomousBehavior?.();
+          }
+        } else if (agentType === "embedded" && agentManager) {
+          await agentManager.resumeAgent(characterId);
+        }
+
+        console.log(`[AdminRoutes] Resumed agent ${characterId}`);
+        return reply.send({ success: true });
+      } catch (err) {
+        console.error("[AdminRoutes] Resume agent error:", err);
+        return reply.code(500).send({ error: "Failed to resume agent" });
+      }
+    },
+  );
+
+  /**
+   * POST /admin/agents/:characterId/stop
+   * Fully stop an agent (remove from world). Requires server restart to bring back.
+   */
+  fastify.post<{ Params: { characterId: string } }>(
+    "/admin/agents/:characterId/stop",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const { characterId } = request.params;
+
+      try {
+        const { agentType, modelProvider, modelModel, agentManager } =
+          await resolveAgentType(characterId);
+
+        if (agentType === "none") {
+          return reply.code(404).send({ error: "Agent not found" });
+        }
+
+        if (agentType === "model" && modelProvider && modelModel) {
+          const { getAgentRuntimeByCharacterId, stopModelAgent } =
+            await import("../../eliza/index.js");
+
+          // Gracefully wind down the HyperscapeService before tearing down
+          // the runtime.  Any residual [PLUGIN:SQL] teardown warnings are
+          // caught by the global unhandledRejection handler in shutdown.ts.
+          const runtime = getAgentRuntimeByCharacterId(characterId);
+          if (runtime) {
+            try {
+              const service = runtime.getService("hyperscapeService") as {
+                stopAutonomousBehavior?: () => void;
+                stop?: () => Promise<void>;
+              } | null;
+              if (service?.stop) {
+                await service.stop();
+              } else {
+                service?.stopAutonomousBehavior?.();
+              }
+            } catch {
+              /* service may not exist or already stopped */
+            }
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+
+          await stopModelAgent(modelProvider, modelModel);
+        } else if (agentType === "embedded" && agentManager) {
+          await agentManager.stopAgent(characterId);
+        }
+
+        console.log(`[AdminRoutes] Stopped agent ${characterId}`);
+        return reply.send({ success: true });
+      } catch (err) {
+        console.error("[AdminRoutes] Stop agent error:", err);
+        return reply.code(500).send({ error: "Failed to stop agent" });
+      }
+    },
+  );
+
+  /**
+   * GET /admin/agents/:characterId/kills
+   * NPC kill counts for an agent, aggregated by NPC type.
+   */
+  fastify.get<{ Params: { characterId: string } }>(
+    "/admin/agents/:characterId/kills",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const ctx = getDb(reply);
+      if (!ctx) return;
+      const { db } = ctx;
+      const { characterId } = request.params;
+
+      try {
+        const kills = await db
+          .select({
+            npcId: schema.npcKills.npcId,
+            count: schema.npcKills.killCount,
+          })
+          .from(schema.npcKills)
+          .where(eq(schema.npcKills.playerId, characterId))
+          .orderBy(desc(schema.npcKills.killCount));
+
+        return reply.send({
+          kills: kills.map((k) => ({
+            npcId: k.npcId,
+            name: k.npcId
+              .replace(/_/g, " ")
+              .replace(/\b\w/g, (c) => c.toUpperCase()),
+            count: k.count,
+          })),
+        });
+      } catch (err) {
+        console.error("[AdminRoutes] Agent kills error:", err);
+        return reply.code(500).send({ error: "Failed to fetch kill data" });
+      }
     },
   );
 }
