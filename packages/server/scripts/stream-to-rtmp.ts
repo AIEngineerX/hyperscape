@@ -507,6 +507,12 @@ async function captureGpuDiagnostics(): Promise<void> {
   const playwrightHeadless =
     STREAM_CAPTURE_HEADLESS && !STREAM_CAPTURE_HEADLESS_NEW;
 
+  // Use Metal on macOS, Vulkan elsewhere
+  const diagFeatureFlags =
+    process.platform === "darwin"
+      ? "--enable-features=UseSkiaRenderer,WebGPU"
+      : "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
+
   const launchConfig = {
     headless: playwrightHeadless,
     ignoreDefaultArgs: ["--enable-unsafe-swiftshader"],
@@ -521,17 +527,19 @@ async function captureGpuDiagnostics(): Promise<void> {
       "--use-gl=angle",
       `--use-angle=${ANGLE_BACKEND}`,
       "--enable-unsafe-webgpu",
-      "--enable-features=Vulkan,UseSkiaRenderer,WebGPU",
+      diagFeatureFlags,
       "--ignore-gpu-blocklist",
       "--disable-software-rasterizer",
       "--disable-gpu-driver-bug-workarounds",
     ],
     env: {
       ...process.env,
-      // Ensure Vulkan ICD is explicitly set
-      VK_ICD_FILENAMES:
-        process.env.VK_ICD_FILENAMES ||
-        "/usr/share/vulkan/icd.d/nvidia_icd.json",
+      // Ensure Vulkan ICD is explicitly set (Linux/Windows only)
+      ...(process.platform !== "darwin" && {
+        VK_ICD_FILENAMES:
+          process.env.VK_ICD_FILENAMES ||
+          "/usr/share/vulkan/icd.d/nvidia_icd.json",
+      }),
     },
   };
 
@@ -623,9 +631,13 @@ async function captureGpuDiagnostics(): Promise<void> {
 
 async function launchCaptureBrowser() {
   // WebGPU is REQUIRED - configure Chrome for optimal WebGPU support
-  const featureFlags = "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
+  // Use Metal on macOS, Vulkan elsewhere
+  const featureFlags =
+    process.platform === "darwin"
+      ? "--enable-features=UseSkiaRenderer,WebGPU"
+      : "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
 
-  // Use ANGLE/Vulkan for WebGPU support
+  // Use ANGLE with Metal on macOS, Vulkan elsewhere
   const glArgs = ["--use-gl=angle", `--use-angle=${ANGLE_BACKEND}`];
 
   // Headless mode configuration
@@ -747,6 +759,33 @@ async function launchCaptureBrowser() {
       ...launchConfig,
       channel: STREAM_CAPTURE_CHANNEL,
     });
+  }
+
+  // On macOS, Playwright's bundled Chromium doesn't have WebGPU support.
+  // Try to use Chrome first for proper WebGPU support.
+  if (process.platform === "darwin") {
+    const macChromePaths = [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ];
+    for (const chromePath of macChromePaths) {
+      if (fs.existsSync(chromePath)) {
+        console.log(
+          `[Main] macOS: Using Chrome for WebGPU support: ${chromePath}`,
+        );
+        return await chromium.launch({
+          ...launchConfig,
+          executablePath: chromePath,
+        });
+      }
+    }
+    console.warn(
+      "[Main] macOS: Chrome not found at standard locations. WebGPU may not work with bundled Chromium.",
+    );
+    console.warn(
+      "[Main] Install Chrome or set STREAM_CAPTURE_EXECUTABLE=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    );
   }
 
   try {
