@@ -314,8 +314,10 @@ async function waitForStreamReadiness(
 ): Promise<boolean> {
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
+  let probeCount = 0;
 
   while (Date.now() < deadline) {
+    probeCount++;
     try {
       const probe = await pageRef.evaluate(() => {
         const win = window as unknown as {
@@ -330,21 +332,34 @@ async function waitForStreamReadiness(
           hasCanvas: document.querySelector("canvas") !== null,
           readyFlag: win.__HYPERSCAPE_STREAM_READY__ === true,
           hasStreamingBootUi,
+          textPreview: text.slice(0, 200),
         };
       });
 
+      // Log probe status every 10 seconds
+      if (probeCount % 10 === 0 || probeCount === 1) {
+        console.log(
+          `[Main] Stream readiness probe #${probeCount}: canvas=${probe.hasCanvas}, ready=${probe.readyFlag}, bootUi=${probe.hasStreamingBootUi}, text="${probe.textPreview.replace(/\n/g, " ").slice(0, 80)}..."`,
+        );
+      }
+
       if (probe.readyFlag) {
+        console.log("[Main] Stream ready via __HYPERSCAPE_STREAM_READY__ flag");
         return true;
       }
 
       // Allow capture once we have a canvas and the stream boot/loading UI has
       // cleared (the old gate accepted any canvas, which could lock us at 3%).
       if (probe.hasCanvas && !probe.hasStreamingBootUi) {
+        console.log("[Main] Stream ready via canvas detection (no boot UI)");
         return true;
       }
 
       // Hard fallback after sustained boot-screen presence to avoid deadlock.
       if (probe.hasStreamingBootUi && Date.now() - startedAt >= 180_000) {
+        console.log(
+          "[Main] Stream ready via 180s fallback (boot UI persisted)",
+        );
         return true;
       }
     } catch (err) {
@@ -356,6 +371,7 @@ async function waitForStreamReadiness(
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
 
+  console.warn(`[Main] Stream readiness timed out after ${timeoutMs}ms`);
   return false;
 }
 
