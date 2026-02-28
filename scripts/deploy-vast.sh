@@ -485,31 +485,25 @@ if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     # Create a Node.js test script using Playwright with explicit executable path
     cat > /tmp/playwright-webgpu-test.mjs << 'PLAYWRIGHTEOF'
 import { chromium } from 'playwright';
-// Use EGL directly with NVIDIA GPU (bypass broken Xorg initialization)
-// nvidia-smi works, so GPU is accessible - just need EGL path
+// NON-HEADLESS Chrome with Xvfb - this is required for WebGPU!
+// WebGPU requires a real window context, not headless mode
+// Xvfb provides the X11 display, Chrome uses GPU via Vulkan
 const args = [
   '--no-sandbox',
   '--disable-dev-shm-usage',
-  // Use EGL directly (no Xorg needed)
-  '--use-gl=egl',
-  // Ozone platform for headless with GPU
-  '--ozone-platform=headless',
-  // Headless with GPU support (new mode, not old --headless)
-  '--headless=new',
+  // CRITICAL: DO NOT use headless flags - WebGPU needs window context
+  // Chrome connects to Xvfb on DISPLAY=:99
+  // Use ANGLE with Vulkan backend for WebGPU
+  '--use-angle=vulkan',
   // WebGPU essentials
   '--enable-unsafe-webgpu',
-  '--enable-features=WebGPU,Vulkan,UseSkiaRenderer,VaapiVideoDecodeLinuxGL',
+  '--enable-features=WebGPU,Vulkan',
   '--ignore-gpu-blocklist',
-  // ANGLE with Vulkan backend for WebGPU
-  '--use-angle=vulkan',
-  // Enable GPU and disable software fallback
+  // Enable GPU
   '--enable-gpu',
   '--disable-software-rasterizer',
-  // Disable GPU sandbox for container environment
+  // Disable GPU sandbox for container
   '--disable-gpu-sandbox',
-  // Additional GPU flags
-  '--enable-gpu-rasterization',
-  '--enable-zero-copy',
 ];
 
 // Find Chrome Dev executable
@@ -534,19 +528,16 @@ try {
   console.log('DEBUG: args =', args.join(' '));
 
   const launchOpts = {
-    headless: false,  // Playwright headless=false, we use --headless=new in args
+    headless: false,  // CRITICAL: Non-headless for WebGPU!
     args,
-    // Prevent Playwright from adding conflicting headless/swiftshader flags
+    // Prevent Playwright from adding headless/swiftshader
     ignoreDefaultArgs: ['--headless', '--enable-unsafe-swiftshader'],
-    // NVIDIA GPU environment
+    // NVIDIA GPU environment - use Vulkan for WebGPU
     env: {
       ...process.env,
-      // NVIDIA Vulkan ICD for hardware WebGPU
+      DISPLAY: process.env.DISPLAY || ':99',  // Xvfb display
       VK_ICD_FILENAMES: '/usr/share/vulkan/icd.d/nvidia_icd.json',
-      LIBGL_ALWAYS_SOFTWARE: '0',  // Force hardware GPU
-      // NVIDIA EGL configuration
-      __NV_PRIME_RENDER_OFFLOAD: '1',
-      __GLX_VENDOR_LIBRARY_NAME: 'nvidia',
+      LIBGL_ALWAYS_SOFTWARE: '0',
     },
   };
   if (executablePath) {
