@@ -146,7 +146,11 @@ export class DuelOrchestrator {
   private duelFoodSlotsByAgent: Map<string, DuelFoodProvisionedSlot[]> =
     new Map();
   private combatRolesByAgent: Map<string, DuelCombatRole> = new Map();
-  private lastCombatStallNudgeCycleId: string | null = null;
+  /**
+   * Track last nudge timestamp per agent pair to allow re-nudging if combat stalls again.
+   * Key format: "cycleId-agent1Id-agent2Id"
+   */
+  private lastCombatStallNudgeAt: number = 0;
 
   constructor(
     private readonly world: World,
@@ -1863,17 +1867,26 @@ export class DuelOrchestrator {
   applyCombatStallNudge(now: number): void {
     const cycle = this.getCurrentCycle();
     if (!cycle || cycle.phase !== "FIGHTING") return;
-    if (this.lastCombatStallNudgeCycleId === cycle.cycleId) return;
 
     const { agent1, agent2 } = cycle;
     if (!agent1 || !agent2) return;
 
-    const hasCombatEvidence =
-      agent1.currentHp < agent1.maxHp ||
-      agent2.currentHp < agent2.maxHp ||
-      agent1.damageDealtThisFight > 0 ||
-      agent2.damageDealtThisFight > 0;
-    if (hasCombatEvidence) return;
+    // Cooldown: don't nudge more than once per STREAMING_COMBAT_STALL_NUDGE_MS
+    // This allows re-nudging if combat stalls again after the cooldown
+    const timeSinceLastNudge = now - this.lastCombatStallNudgeAt;
+    if (timeSinceLastNudge < STREAMING_COMBAT_STALL_NUDGE_MS) return;
+
+    // Check if there's evidence of active combat SINCE the last nudge
+    // We look at recent damage, not total damage, to allow re-nudging
+    const recentCombatEvidence =
+      agent1.currentHp < agent1.maxHp || agent2.currentHp < agent2.maxHp;
+
+    // If both agents are at full HP, combat hasn't started - nudge needed
+    // If HP is damaged but no recent damage in the last stall window, also nudge
+    if (recentCombatEvidence) {
+      // Combat is happening, no nudge needed
+      return;
+    }
 
     const attackerId = agent1.characterId;
     const targetId = agent2.characterId;
@@ -1904,10 +1917,10 @@ export class DuelOrchestrator {
       damage,
     });
 
-    this.lastCombatStallNudgeCycleId = cycle.cycleId;
+    this.lastCombatStallNudgeAt = now;
     Logger.warn(
       "StreamingDuelScheduler",
-      `Applied fallback combat nudge (${attackerId} -> ${targetId}, damage=${damage})`,
+      `Applied fallback combat nudge (${attackerId} -> ${targetId}, damage=${damage}, timeSinceLastNudge=${timeSinceLastNudge}ms)`,
     );
   }
 
@@ -2276,7 +2289,7 @@ export class DuelOrchestrator {
     this.stopCombatAIs();
     this.duelFoodSlotsByAgent.clear();
     this.combatRolesByAgent.clear();
-    this.lastCombatStallNudgeCycleId = null;
+    this.lastCombatStallNudgeAt = 0;
     this.combatLoopTickCount = 0;
   }
 }

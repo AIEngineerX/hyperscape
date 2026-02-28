@@ -586,9 +586,9 @@ export class EventBridge {
         const currentTick = this.world.currentTick;
         const dedupeKey = `${data.attackerId}-${data.targetId}-${currentTick}`;
 
-        // Cleanup old entries (older than 2 ticks) — uses stored tick number
-        // instead of parsing it from the key string (avoids split/parseInt allocs)
-        if (currentTick > this.lastCleanupTick + 1) {
+        // Cleanup old entries every tick (entries older than 2 ticks)
+        // More aggressive cleanup to prevent memory buildup
+        if (currentTick > this.lastCleanupTick) {
           for (const [key, entry] of this.recentDamageEvents) {
             if (entry.tick < currentTick - 1) {
               this.recentDamageEvents.delete(key);
@@ -597,13 +597,14 @@ export class EventBridge {
           this.lastCleanupTick = currentTick;
         }
 
-        // Safety cap: if Map somehow grows large (e.g. tick counter anomaly),
-        // evict oldest entries to prevent unbounded memory growth.
-        if (this.recentDamageEvents.size > 5000) {
+        // Safety cap: prevent unbounded memory growth with aggressive eviction
+        // Lower threshold (1000) and evict more entries (75%) to recover quickly
+        if (this.recentDamageEvents.size > 1000) {
           let evicted = 0;
+          const evictTarget = Math.floor(this.recentDamageEvents.size * 0.75);
           for (const [key] of this.recentDamageEvents) {
             this.recentDamageEvents.delete(key);
-            if (++evicted >= 2500) break;
+            if (++evicted >= evictTarget) break;
           }
         }
 

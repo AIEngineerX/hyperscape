@@ -233,6 +233,11 @@ export class AutonomousBehaviorManager {
   private readonly NEAR_DEATH_THRESHOLD = 0.2; // 20% of current health
   private combatEventHandlerRegistered = false;
 
+  /** Stored event handler references for cleanup during stop() */
+  private combatDamageHandler: ((data: unknown) => void) | null = null;
+  private duelStartHandler: (() => void) | null = null;
+  private duelCompletedHandler: ((data: unknown) => void) | null = null;
+
   /** Action lock — skip LLM while an action is in progress */
   private actionLock: {
     actionName: string;
@@ -362,25 +367,28 @@ export class AutonomousBehaviorManager {
       `[AutonomousBehavior] Allowed actions: ${Array.from(this.allowedActions).join(", ")}`,
     );
 
-    // Subscribe to combat events for chat reactions
+    // Subscribe to combat events for chat reactions (store refs for cleanup)
     if (!this.combatEventHandlerRegistered) {
-      this.service.onGameEvent("COMBAT_DAMAGE_DEALT", (data: unknown) => {
+      this.combatDamageHandler = (data: unknown) => {
         this.handleCombatDamageEvent(data);
-      });
+      };
+      this.service.onGameEvent("COMBAT_DAMAGE_DEALT", this.combatDamageHandler);
       this.combatEventHandlerRegistered = true;
       logger.info(
         "[AutonomousBehavior] Registered combat chat reaction handler",
       );
     }
 
-    // Subscribe to duel events for goal save/restore and duel awareness
+    // Subscribe to duel events for goal save/restore and duel awareness (store refs for cleanup)
     if (!this.duelEventHandlerRegistered) {
-      this.service.onGameEvent("DUEL_FIGHT_START", () => {
+      this.duelStartHandler = () => {
         this.onDuelStart();
-      });
-      this.service.onGameEvent("DUEL_COMPLETED", (data: unknown) => {
+      };
+      this.duelCompletedHandler = (data: unknown) => {
         this.onDuelCompleted(data);
-      });
+      };
+      this.service.onGameEvent("DUEL_FIGHT_START", this.duelStartHandler);
+      this.service.onGameEvent("DUEL_COMPLETED", this.duelCompletedHandler);
       this.duelEventHandlerRegistered = true;
       logger.info("[AutonomousBehavior] Registered duel event handlers");
     }
@@ -407,6 +415,29 @@ export class AutonomousBehaviorManager {
 
     logger.info("[AutonomousBehavior] Stopping autonomous behavior...");
     this.isRunning = false;
+
+    // Unregister event handlers to prevent memory leaks
+    if (this.service && this.combatDamageHandler) {
+      this.service.offGameEvent(
+        "COMBAT_DAMAGE_DEALT",
+        this.combatDamageHandler,
+      );
+      this.combatDamageHandler = null;
+      this.combatEventHandlerRegistered = false;
+      logger.info("[AutonomousBehavior] Unregistered combat event handler");
+    }
+
+    if (this.service && this.duelStartHandler) {
+      this.service.offGameEvent("DUEL_FIGHT_START", this.duelStartHandler);
+      this.duelStartHandler = null;
+    }
+
+    if (this.service && this.duelCompletedHandler) {
+      this.service.offGameEvent("DUEL_COMPLETED", this.duelCompletedHandler);
+      this.duelCompletedHandler = null;
+      this.duelEventHandlerRegistered = false;
+      logger.info("[AutonomousBehavior] Unregistered duel event handlers");
+    }
   }
 
   /**

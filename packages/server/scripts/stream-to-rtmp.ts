@@ -162,7 +162,7 @@ let page: Page | null = null;
 let cdpSession: CDPSession | null = null;
 let selectedGameUrl: string | null = null;
 let launchTime = Date.now();
-const BROWSER_RESTART_INTERVAL_MS = 1 * 60 * 60 * 1000; // 1 Hour
+const BROWSER_RESTART_INTERVAL_MS = 45 * 60 * 1000; // 45 minutes (prevents WebGPU OOM)
 const CAPTURE_RECOVERY_TIMEOUT_MS = Math.max(
   10_000,
   Number.parseInt(
