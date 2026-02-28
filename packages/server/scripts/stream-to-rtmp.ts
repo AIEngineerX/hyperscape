@@ -560,8 +560,9 @@ async function setupBrowser() {
     for (const candidateUrl of GAME_URL_CANDIDATES) {
       console.log(`[Main] Navigating to ${candidateUrl}...`);
       try {
+        // Use longer timeout for Vite dev mode (180s) - production builds are faster
         await page.goto(candidateUrl, {
-          timeout: 60_000,
+          timeout: 180_000,
           waitUntil: "domcontentloaded",
         });
       } catch (err) {
@@ -582,7 +583,7 @@ async function setupBrowser() {
   } else {
     try {
       await page.goto(selectedGameUrl, {
-        timeout: 60_000,
+        timeout: 180_000,
         waitUntil: "domcontentloaded",
       });
     } catch (err) {
