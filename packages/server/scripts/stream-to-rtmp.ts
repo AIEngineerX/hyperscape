@@ -635,10 +635,15 @@ async function launchCaptureBrowser() {
   const featureFlags =
     process.platform === "darwin"
       ? "--enable-features=UseSkiaRenderer,WebGPU"
-      : "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
+      : "--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan,UseSkiaRenderer,WebGPU";
 
   // Use ANGLE with Metal on macOS, Vulkan elsewhere
   const glArgs = ["--use-gl=angle", `--use-angle=${ANGLE_BACKEND}`];
+
+  // Dawn-specific flags for container GPU access
+  const dawnArgs = [
+    "--enable-dawn-features=allow_unsafe_apis,disable_blob_cache",
+  ];
 
   // Headless mode configuration
   // NOTE: WebGPU requires a display (Xorg or Xvfb) - pure headless won't work
@@ -668,10 +673,12 @@ async function launchCaptureBrowser() {
       ...(STREAM_CAPTURE_HEADLESS_NEW ? ["--headless=new"] : []),
       // GPU / WebGPU essentials - WebGPU is REQUIRED
       ...glArgs,
+      ...dawnArgs,
       "--enable-unsafe-webgpu",
       featureFlags,
       "--ignore-gpu-blocklist",
       "--enable-gpu-rasterization",
+      "--use-cmd-decoder=passthrough",
       // Force hardware GPU rendering - disable software fallbacks
       "--disable-software-rasterizer",
       "--disable-gpu-driver-bug-workarounds",
