@@ -371,12 +371,13 @@ WEBGPU_WORKING="false"
 # Common Chrome flags for WebGPU testing
 # CRITICAL: --disable-gpu-sandbox is required for container GPU access
 CHROME_GPU_FLAGS="--no-sandbox --disable-gpu-sandbox --disable-setuid-sandbox --disable-dev-shm-usage"
-CHROME_WEBGPU_FLAGS="--enable-unsafe-webgpu --enable-features=Vulkan,UseSkiaRenderer,WebGPU --ignore-gpu-blocklist --disable-software-rasterizer"
+CHROME_WEBGPU_FLAGS="--enable-unsafe-webgpu --enable-features=Vulkan,UseSkiaRenderer,WebGPU --ignore-gpu-blocklist --disable-software-rasterizer --disable-gpu-driver-bug-workarounds"
 
-# Test 1: Headless=new with Vulkan ANGLE (requires working Vulkan)
-echo "[deploy] Test 1: Chrome headless=new with ANGLE/Vulkan..."
+# Test 1: Headless=new with native Vulkan (requires NVIDIA Vulkan ICD)
+echo "[deploy] Test 1: Chrome headless=new with native Vulkan..."
 WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
     $CHROME_GPU_FLAGS \
+    --use-vulkan \
     --use-gl=angle \
     --use-angle=vulkan \
     $CHROME_WEBGPU_FLAGS \
@@ -395,6 +396,7 @@ if [ "$WEBGPU_WORKING" = "false" ]; then
     WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
         $CHROME_GPU_FLAGS \
         --use-gl=egl \
+        --use-vulkan \
         $CHROME_WEBGPU_FLAGS \
         --headless=new \
         --dump-dom \
@@ -403,20 +405,21 @@ if [ "$WEBGPU_WORKING" = "false" ]; then
     echo "[deploy] Test 2 Result: $WEBGPU_TEST_RESULT"
     if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
         WEBGPU_WORKING="headless-egl"
-        # Update streaming config to use EGL
         export STREAM_CAPTURE_USE_EGL="true"
         export STREAM_CAPTURE_ANGLE="default"
     fi
 fi
 
-# Test 3: With Xvfb display (headful mode with virtual framebuffer)
+# Test 3: With Xvfb display (headless=new + virtual framebuffer for GPU surface)
 if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
-    echo "[deploy] Test 3: Chrome with DISPLAY=$DISPLAY (Xvfb)..."
+    echo "[deploy] Test 3: Chrome headless=new with DISPLAY=$DISPLAY (Xvfb)..."
     WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
         $CHROME_GPU_FLAGS \
+        --use-vulkan \
         --use-gl=angle \
         --use-angle=vulkan \
         $CHROME_WEBGPU_FLAGS \
+        --headless=new \
         --dump-dom \
         --virtual-time-budget=5000 \
         "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
@@ -426,15 +429,18 @@ if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     fi
 fi
 
-# Test 4: Try with ozone-platform=headless (Wayland-like headless)
+# Test 4: Try with ozone-platform=headless (Wayland-like headless) + aggressive GPU flags
 if [ "$WEBGPU_WORKING" = "false" ]; then
-    echo "[deploy] Test 4: Chrome with ozone-platform=headless..."
+    echo "[deploy] Test 4: Chrome with ozone-platform=headless + aggressive GPU flags..."
     WEBGPU_TEST_RESULT=$(timeout 30 google-chrome-unstable \
         $CHROME_GPU_FLAGS \
         --ozone-platform=headless \
+        --use-vulkan \
         --use-gl=angle \
         --use-angle=vulkan \
         $CHROME_WEBGPU_FLAGS \
+        --enable-dawn-features=allow_unsafe_apis \
+        --headless=new \
         --dump-dom \
         --virtual-time-budget=5000 \
         "file:///tmp/webgpu-test.html" 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")

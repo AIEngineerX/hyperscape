@@ -510,14 +510,19 @@ async function captureGpuDiagnostics(): Promise<void> {
     ignoreDefaultArgs: ["--enable-unsafe-swiftshader"],
     args: [
       ...(STREAM_CAPTURE_HEADLESS_NEW ? ["--headless=new"] : []),
+      // CRITICAL: Sandbox bypass for container GPU access
       "--no-sandbox",
+      "--disable-gpu-sandbox",
+      "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
+      // GPU / WebGPU rendering
       "--use-gl=angle",
       `--use-angle=${ANGLE_BACKEND}`,
       "--enable-unsafe-webgpu",
       "--enable-features=Vulkan,UseSkiaRenderer,WebGPU",
       "--ignore-gpu-blocklist",
       "--disable-software-rasterizer",
+      "--disable-gpu-driver-bug-workarounds",
     ],
     env: {
       ...process.env,
