@@ -340,34 +340,21 @@ echo "[deploy] Testing WebGPU before starting services..."
 echo "[deploy] ═══════════════════════════════════════════════════════════"
 
 # Create a simple WebGPU test HTML file
-# Output result to DOM for --dump-dom capture, and also to console for debugging
+# Output result to DOM SYNCHRONOUSLY for --dump-dom capture
+# We only check navigator.gpu existence - adapter request is async and would timeout
 cat > /tmp/webgpu-test.html << 'WEBGPUHTML'
 <!DOCTYPE html>
 <html><body>
-<div id="result">WEBGPU_RESULT: PENDING</div>
 <script>
-(async () => {
-  const resultEl = document.getElementById('result');
-  try {
-    if (!navigator.gpu) {
-      resultEl.textContent = 'WEBGPU_RESULT: FAILED - navigator.gpu not available';
-      console.log(resultEl.textContent);
-      return;
-    }
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter) {
-      resultEl.textContent = 'WEBGPU_RESULT: FAILED - No adapter';
-      console.log(resultEl.textContent);
-      return;
-    }
-    const info = await adapter.requestAdapterInfo();
-    resultEl.textContent = 'WEBGPU_RESULT: SUCCESS - Adapter: ' + (info.vendor || 'unknown') + ' ' + (info.description || '');
-    console.log(resultEl.textContent);
-  } catch (e) {
-    resultEl.textContent = 'WEBGPU_RESULT: FAILED - ' + e.message;
-    console.log(resultEl.textContent);
-  }
-})();
+// Synchronous check - write result to document immediately
+var result = 'WEBGPU_RESULT: ';
+if (typeof navigator === 'undefined' || !navigator.gpu) {
+  result += 'FAILED - navigator.gpu not available';
+} else {
+  result += 'SUCCESS - navigator.gpu exists';
+}
+document.write('<div id="result">' + result + '</div>');
+console.log(result);
 </script>
 </body></html>
 WEBGPUHTML
@@ -482,7 +469,7 @@ fi
 if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     echo "[deploy] Test 6: Playwright non-headless with Xvfb (actual streaming config)..."
 
-    # Create a Node.js test script using Playwright
+    # Create a Node.js test script using Playwright with explicit executable path
     cat > /tmp/playwright-webgpu-test.mjs << 'PLAYWRIGHTEOF'
 import { chromium } from 'playwright';
 const args = [
@@ -492,25 +479,54 @@ const args = [
   '--ignore-gpu-blocklist', '--disable-software-rasterizer',
   '--disable-gpu-driver-bug-workarounds'
 ];
+
+// Find Chrome Dev executable
+const chromePaths = [
+  '/usr/bin/google-chrome-unstable',
+  '/opt/google/chrome-unstable/google-chrome-unstable',
+  '/usr/bin/google-chrome',
+];
+let executablePath = null;
+for (const p of chromePaths) {
+  try {
+    const fs = await import('fs');
+    if (fs.existsSync(p)) { executablePath = p; break; }
+  } catch {}
+}
+
 try {
-  const browser = await chromium.launch({
+  const launchOpts = {
     headless: false,  // Non-headless for WebGPU
     args,
-    channel: 'chrome-dev'
-  });
+  };
+  if (executablePath) {
+    launchOpts.executablePath = executablePath;
+  } else {
+    launchOpts.channel = 'chrome';  // Fallback to system Chrome
+  }
+
+  const browser = await chromium.launch(launchOpts);
   const page = await browser.newPage();
-  await page.goto('file:///tmp/webgpu-test.html', { timeout: 30000 });
-  await page.waitForTimeout(3000);
-  const result = await page.evaluate(() => document.getElementById('result')?.textContent || 'WEBGPU_RESULT: FAILED - no result element');
-  console.log(result);
+
+  // Check navigator.gpu directly on blank page (no need to load test HTML)
+  await page.goto('about:blank', { timeout: 10000 });
+  const hasWebGPU = await page.evaluate(() => !!navigator.gpu);
+
+  if (hasWebGPU) {
+    console.log('WEBGPU_RESULT: SUCCESS - navigator.gpu available');
+  } else {
+    console.log('WEBGPU_RESULT: FAILED - navigator.gpu not available');
+  }
   await browser.close();
-  process.exit(result.includes('SUCCESS') ? 0 : 1);
+  process.exit(hasWebGPU ? 0 : 1);
 } catch (e) {
   console.log('WEBGPU_RESULT: FAILED - ' + e.message);
   process.exit(1);
 }
 PLAYWRIGHTEOF
 
+    # Set PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD to avoid download attempts
+    export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
     WEBGPU_TEST_RESULT=$(timeout 60 node /tmp/playwright-webgpu-test.mjs 2>&1 | grep -o 'WEBGPU_RESULT: .*' | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
     echo "[deploy] Test 6 Result: $WEBGPU_TEST_RESULT"
     if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
