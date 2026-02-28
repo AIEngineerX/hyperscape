@@ -486,23 +486,20 @@ if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     cat > /tmp/playwright-webgpu-test.mjs << 'PLAYWRIGHTEOF'
 import { chromium } from 'playwright';
 const args = [
+  // CRITICAL: Sandbox settings for container GPU access
+  '--no-sandbox', '--disable-gpu-sandbox', '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
   // GPU / WebGPU essentials
   '--use-gl=angle', '--use-angle=vulkan',
   '--enable-unsafe-webgpu',
   '--enable-features=Vulkan,UseSkiaRenderer,WebGPU',
   '--ignore-gpu-blocklist',
-  '--enable-gpu-rasterization',
-  '--disable-software-rasterizer',
-  '--disable-gpu-driver-bug-workarounds',
-  '--enable-accelerated-2d-canvas',
-  '--enable-gpu-compositing',
-  // Sandbox & stability - CRITICAL for container GPU access
-  '--no-sandbox', '--disable-gpu-sandbox', '--disable-setuid-sandbox',
-  '--disable-dev-shm-usage',
-  // Logging for debugging GPU issues
-  '--enable-logging=stderr', '--v=1',
-  // Force GPU initialization
-  '--force-device-scale-factor=1',
+  // Try without these - they might conflict
+  // '--enable-gpu-rasterization',
+  // '--disable-software-rasterizer',
+  // '--disable-gpu-driver-bug-workarounds',
+  // '--enable-accelerated-2d-canvas',
+  // '--enable-gpu-compositing',
 ];
 
 // Find Chrome Dev executable
@@ -546,6 +543,22 @@ try {
 
   const browser = await chromium.launch(launchOpts);
   console.log('DEBUG: Browser launched successfully');
+
+  // Listen for browser disconnection
+  browser.on('disconnected', () => {
+    console.log('DEBUG: Browser disconnected!');
+  });
+
+  // Check if browser is still running after 2 seconds
+  await new Promise(r => setTimeout(r, 2000));
+  console.log('DEBUG: Browser still alive after 2s, connected:', browser.isConnected());
+
+  // If not connected, the browser crashed
+  if (!browser.isConnected()) {
+    console.log('DEBUG: Browser crashed! GPU process likely failed.');
+    console.log('WEBGPU_RESULT: FAILED - Browser crashed on launch (GPU process failure)');
+    process.exit(1);
+  }
 
   const page = await browser.newPage();
 
