@@ -485,7 +485,11 @@ if [ "$WEBGPU_WORKING" = "false" ] && [ -n "$DISPLAY" ]; then
     # Create a Node.js test script using Playwright with explicit executable path
     cat > /tmp/playwright-webgpu-test.mjs << 'PLAYWRIGHTEOF'
 import { chromium } from 'playwright';
-const args = [
+// Try both GPU and software rendering to diagnose
+const useGPU = process.env.TEST_GPU_MODE !== 'false';
+console.log('DEBUG: Testing with GPU mode:', useGPU);
+
+const gpuArgs = [
   // CRITICAL: Sandbox settings for container GPU access
   '--no-sandbox', '--disable-gpu-sandbox', '--disable-setuid-sandbox',
   '--disable-dev-shm-usage',
@@ -494,13 +498,16 @@ const args = [
   '--enable-unsafe-webgpu',
   '--enable-features=Vulkan,UseSkiaRenderer,WebGPU',
   '--ignore-gpu-blocklist',
-  // Try without these - they might conflict
-  // '--enable-gpu-rasterization',
-  // '--disable-software-rasterizer',
-  // '--disable-gpu-driver-bug-workarounds',
-  // '--enable-accelerated-2d-canvas',
-  // '--enable-gpu-compositing',
 ];
+
+const softwareArgs = [
+  '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+  // Software rendering - no GPU
+  '--disable-gpu',
+  '--use-gl=swiftshader',
+];
+
+const args = useGPU ? gpuArgs : softwareArgs;
 
 // Find Chrome Dev executable
 const chromePaths = [
