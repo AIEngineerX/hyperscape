@@ -181,6 +181,9 @@ let cdpFrameCount = 0;
 let cdpFps = 0;
 let cdpFpsIntervalId: ReturnType<typeof setInterval> | null = null;
 let cdpDroppedFrames = 0;
+let cdpLastFrameWidth = 0;
+let cdpLastFrameHeight = 0;
+let cdpResolutionMismatchCount = 0;
 
 function startFpsTracking() {
   if (cdpFpsIntervalId) clearInterval(cdpFpsIntervalId);
@@ -379,6 +382,8 @@ async function launchCaptureBrowser() {
 
   const launchConfig = {
     headless: playwrightHeadless,
+    // Ignore Playwright's SwiftShader default which conflicts with GPU rendering
+    ignoreDefaultArgs: ["--enable-unsafe-swiftshader"],
     args: [
       // Chrome's new headless mode (if requested) - must be passed as arg, not option
       ...(STREAM_CAPTURE_HEADLESS_NEW ? ["--headless=new"] : []),
@@ -625,7 +630,46 @@ async function startCdpCapture(bridge: ReturnType<typeof getRTMPBridge>) {
 
   // Handle incoming frames from CDP
   cdpSession.on("Page.screencastFrame", async (params) => {
-    const { sessionId, data: base64Data } = params;
+    const { sessionId, data: base64Data, metadata } = params;
+
+    // Track frame dimensions from CDP metadata
+    if (metadata) {
+      const { deviceWidth, deviceHeight } = metadata;
+      if (deviceWidth && deviceHeight) {
+        // Detect resolution changes
+        if (
+          cdpLastFrameWidth !== deviceWidth ||
+          cdpLastFrameHeight !== deviceHeight
+        ) {
+          const wasWrongSize =
+            cdpLastFrameWidth > 0 &&
+            (cdpLastFrameWidth !== VIEWPORT.width ||
+              cdpLastFrameHeight !== VIEWPORT.height);
+          cdpLastFrameWidth = deviceWidth;
+          cdpLastFrameHeight = deviceHeight;
+
+          // Log dimension changes
+          const matches =
+            deviceWidth === VIEWPORT.width && deviceHeight === VIEWPORT.height;
+          if (!matches) {
+            cdpResolutionMismatchCount++;
+            if (
+              cdpResolutionMismatchCount <= 3 ||
+              cdpResolutionMismatchCount % 100 === 0
+            ) {
+              console.warn(
+                `[CDP] Resolution mismatch: got ${deviceWidth}x${deviceHeight}, expected ${VIEWPORT.width}x${VIEWPORT.height} (count: ${cdpResolutionMismatchCount})`,
+              );
+            }
+          } else if (wasWrongSize) {
+            console.log(
+              `[CDP] Resolution restored: ${deviceWidth}x${deviceHeight} ✓`,
+            );
+            cdpResolutionMismatchCount = 0;
+          }
+        }
+      }
+    }
 
     // Acknowledge the frame immediately to request the next one
     try {
@@ -1002,9 +1046,42 @@ async function main() {
     );
 
     if (activeCaptureMode === "cdp") {
+      const resInfo =
+        cdpLastFrameWidth > 0
+          ? `${cdpLastFrameWidth}x${cdpLastFrameHeight}${cdpLastFrameWidth !== VIEWPORT.width || cdpLastFrameHeight !== VIEWPORT.height ? " (MISMATCH!)" : ""}`
+          : "unknown";
       console.log(
-        `[Stream Health] CDP FPS: ${cdpFps} | Frames: ${bridge.getDirectFrameCount()} | Dropped: ${cdpDroppedFrames} | BridgeDrops: ${stats.droppedFrames} | Backpressure: ${stats.backpressured ? "ON" : "off"}`,
+        `[Stream Health] CDP FPS: ${cdpFps} | Resolution: ${resInfo} | Frames: ${bridge.getDirectFrameCount()} | Dropped: ${cdpDroppedFrames} | BridgeDrops: ${stats.droppedFrames} | Backpressure: ${stats.backpressured ? "ON" : "off"}`,
       );
+
+      // Auto-recover viewport if resolution is consistently wrong (e.g., window minimized)
+      const hasMismatch =
+        cdpLastFrameWidth > 0 &&
+        (cdpLastFrameWidth !== VIEWPORT.width ||
+          cdpLastFrameHeight !== VIEWPORT.height);
+      if (
+        hasMismatch &&
+        cdpResolutionMismatchCount >= 10 &&
+        !cdpRecoveryInFlight
+      ) {
+        console.warn(
+          `[Main] Persistent resolution mismatch (${cdpResolutionMismatchCount} frames). Attempting viewport fix...`,
+        );
+        cdpResolutionMismatchCount = 0;
+        // Try to fix viewport size via Playwright
+        if (page && !page.isClosed()) {
+          page
+            .setViewportSize(VIEWPORT)
+            .then(() => {
+              console.log(
+                `[Main] Viewport resized to ${VIEWPORT.width}x${VIEWPORT.height}`,
+              );
+            })
+            .catch((err) => {
+              console.warn("[Main] Failed to resize viewport:", errMsg(err));
+            });
+        }
+      }
 
       // CDP can occasionally stall after initial page setup on remote GPU stacks.
       // Detect sustained no-traffic periods and recover automatically.
@@ -1063,7 +1140,12 @@ async function main() {
                   everyNthFrame: 1,
                 });
                 cdpSession.on("Page.screencastFrame", async (params) => {
-                  const { sessionId, data: base64Data } = params;
+                  const { sessionId, data: base64Data, metadata } = params;
+                  // Track frame dimensions after recovery
+                  if (metadata?.deviceWidth && metadata?.deviceHeight) {
+                    cdpLastFrameWidth = metadata.deviceWidth;
+                    cdpLastFrameHeight = metadata.deviceHeight;
+                  }
                   try {
                     await cdpSession?.send("Page.screencastFrameAck", {
                       sessionId,

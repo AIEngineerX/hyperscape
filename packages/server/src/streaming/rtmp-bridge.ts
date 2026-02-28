@@ -163,6 +163,11 @@ export class RTMPBridge {
         DEFAULT_STREAMING_CONFIG.audioBitrate,
         32,
       ),
+      gopSize: parseEnvInt(
+        process.env.STREAM_GOP_SIZE,
+        DEFAULT_STREAMING_CONFIG.gopSize,
+        15,
+      ),
     };
 
     this.config = { ...DEFAULT_STREAMING_CONFIG, ...envConfig, ...config };
@@ -177,7 +182,7 @@ export class RTMPBridge {
     this.ffmpegCommand = resolveFfmpegCommand();
     console.log(`[RTMPBridge] Using FFmpeg command: ${this.ffmpegCommand}`);
     console.log(
-      `[RTMPBridge] Stream profile: ${this.config.width}x${this.config.height}@${this.config.fps} ${this.config.videoBitrate}k video / ${this.config.audioBitrate}k audio`,
+      `[RTMPBridge] Stream profile: ${this.config.width}x${this.config.height}@${this.config.fps}fps, GOP=${this.config.gopSize}, ${this.config.videoBitrate}k video / ${this.config.audioBitrate}k audio`,
     );
   }
 

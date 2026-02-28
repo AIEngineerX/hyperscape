@@ -111,28 +111,25 @@ module.exports = {
                 // Stream health monitoring
                 STREAM_CAPTURE_RECOVERY_TIMEOUT_MS: "30000",
                 STREAM_CAPTURE_RECOVERY_MAX_FAILURES: "6",
+                // Stream encoding optimization
+                // STREAM_LOW_LATENCY: "true" enables zerolatency tune (faster playback start, higher bitrate)
+                // Leave false for better quality/compression with B-frames
+                STREAM_LOW_LATENCY: "false",
+                // GOP size (keyframe interval) - lower = faster playback start but larger file size
+                // Default is 60 frames (2 seconds at 30fps) - reduce to 30 for faster startup
+                STREAM_GOP_SIZE: "60",
                 // Streaming destinations: Twitch, Kick, X (no YouTube)
                 // YouTube explicitly disabled - empty string prevents rtmp-bridge from adding it
                 YOUTUBE_STREAM_KEY: "",
                 YOUTUBE_RTMP_STREAM_KEY: "",
-                // Twitch
-                TWITCH_STREAM_KEY:
-                    process.env.TWITCH_STREAM_KEY ||
-                    "live_1448195175_LJg4udZUXdClgNXtAfD9b5wKq3nLY8",
-                // Kick (uses RTMPS)
-                KICK_STREAM_KEY:
-                    process.env.KICK_STREAM_KEY ||
-                    "sk_us-west-2_OrgZh8XyN0Qs_DKZE46VeaiqkczE5ZMTx63ct25wZ7q",
-                KICK_RTMP_URL:
-                    process.env.KICK_RTMP_URL ||
-                    "rtmps://fa723fc1b171.global-contribute.live-video.net/app",
-                // X/Twitter
-                X_STREAM_KEY:
-                    process.env.X_STREAM_KEY ||
-                    "sp16tpmtyqws",
-                X_RTMP_URL:
-                    process.env.X_RTMP_URL ||
-                    "rtmp://sg.pscp.tv:80/x",
+                // Twitch - set via TWITCH_STREAM_KEY env var or GitHub secret
+                TWITCH_STREAM_KEY: process.env.TWITCH_STREAM_KEY || "",
+                // Kick (uses RTMPS) - set via KICK_STREAM_KEY and KICK_RTMP_URL env vars
+                KICK_STREAM_KEY: process.env.KICK_STREAM_KEY || "",
+                KICK_RTMP_URL: process.env.KICK_RTMP_URL || "",
+                // X/Twitter - set via X_STREAM_KEY and X_RTMP_URL env vars
+                X_STREAM_KEY: process.env.X_STREAM_KEY || "",
+                X_RTMP_URL: process.env.X_RTMP_URL || "",
                 // Canonical platform for anti-cheat timing (twitch has lower latency than youtube)
                 STREAMING_CANONICAL_PLATFORM: "twitch",
                 // Override public data delay to 0 (no delay)
