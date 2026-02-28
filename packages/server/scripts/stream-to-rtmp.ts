@@ -319,7 +319,8 @@ async function waitForStreamReadiness(
   while (Date.now() < deadline) {
     probeCount++;
     try {
-      const probe = await pageRef.evaluate(() => {
+      // Add 5s timeout to prevent hanging evaluate calls
+      const probePromise = pageRef.evaluate(() => {
         const win = window as unknown as {
           __HYPERSCAPE_STREAM_READY__?: boolean;
         };
@@ -335,6 +336,12 @@ async function waitForStreamReadiness(
           textPreview: text.slice(0, 200),
         };
       });
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Probe timeout (5s)")), 5000),
+      );
+
+      const probe = await Promise.race([probePromise, timeoutPromise]);
 
       // Log probe status every 10 seconds
       if (probeCount % 10 === 0 || probeCount === 1) {
