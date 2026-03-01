@@ -760,21 +760,32 @@ try {
   try {
     page.on('pageerror', err => console.log('BROWSER ERROR:', err.message));
 
-    // Try rendering a simple page
-    await page.goto('data:text/html,<h1>Test</h1>', { timeout: 30000 });
+    // Try rendering a simple page - use localhost to ensure secure context
+    // Start a simple inline server for the test
+    const { createServer } = await import('http');
+    const server = createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<html><head></head><body><h1>WebGPU Test</h1></body></html>');
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    console.log('DEBUG: Test server listening on port', port);
+
+    // Load from localhost (secure context!)
+    await page.goto(`http://127.0.0.1:${port}/`, { timeout: 30000 });
     const title = await page.evaluate(() => document.body.innerHTML);
     console.log('DEBUG: Page rendered successfully, content:', title.substring(0, 50));
 
-    // Now try about:blank
-    await page.goto('about:blank', { timeout: 10000 });
-    console.log('DEBUG: about:blank loaded successfully');
+    // Check secure context on localhost page
+    const isSecure = await page.evaluate(() => window.isSecureContext);
+    console.log('DEBUG: localhost isSecureContext:', isSecure);
 
   } catch (e) {
     console.log('DEBUG: Basic render failed:', e.message);
   }
 
-  // FIRST: Check navigator.gpu (before chrome://gpu which might crash)
-  // WebGPU requires a secure context - check this first
+  // FIRST: Check navigator.gpu on the localhost page (secure context)
+  // WebGPU requires a secure context - localhost is always secure
   console.log('DEBUG: Checking secure context and navigator.gpu...');
   let gpuResult;
   try {
