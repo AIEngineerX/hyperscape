@@ -72,6 +72,46 @@ git lfs install || true
 echo "[deploy] Checking GPU status..."
 nvidia-smi || echo "[deploy] WARNING: nvidia-smi not available"
 
+# ── CRITICAL: Check for display driver support ──────────────────
+# WebGPU requires NVIDIA display driver, not just compute driver.
+# If this fails, you need to rent a Vast.ai instance with gpu_display_active=true
+echo "[deploy] ═══════════════════════════════════════════════════════════"
+echo "[deploy] CRITICAL CHECK: Verifying NVIDIA display driver support..."
+echo "[deploy] WebGPU streaming REQUIRES display driver, not just compute."
+echo "[deploy] ═══════════════════════════════════════════════════════════"
+
+# Check if nvidia-drm kernel module is loaded (required for display)
+if lsmod | grep -q nvidia_drm; then
+    echo "[deploy] ✓ nvidia_drm kernel module is loaded"
+else
+    echo "[deploy] ✗ nvidia_drm kernel module NOT loaded"
+    echo "[deploy] This instance may not support display rendering."
+fi
+
+# Check for DRM device nodes
+if [ -e /dev/dri/card0 ] || [ -e /dev/nvidia0 ]; then
+    echo "[deploy] ✓ GPU device nodes found"
+    ls -la /dev/dri/ 2>/dev/null || true
+    ls -la /dev/nvidia* 2>/dev/null || true
+else
+    echo "[deploy] ✗ No DRM device nodes (/dev/dri/card0) found"
+    echo "[deploy] This instance likely does NOT support display rendering."
+fi
+
+# Check for NVIDIA display driver by attempting to query GPU display mode
+GPU_DISPLAY_MODE=$(nvidia-smi --query-gpu=display_mode --format=csv,noheader 2>/dev/null | head -1 || echo "unknown")
+echo "[deploy] GPU display_mode: $GPU_DISPLAY_MODE"
+
+if [ "$GPU_DISPLAY_MODE" = "Enabled" ]; then
+    echo "[deploy] ✓ GPU display mode is ENABLED - good for WebGPU!"
+elif [ "$GPU_DISPLAY_MODE" = "Disabled" ]; then
+    echo "[deploy] ⚠️  GPU display mode is DISABLED"
+    echo "[deploy] This may prevent WebGPU from working."
+    echo "[deploy] Consider renting a Vast.ai instance with: gpu_display_active=true"
+fi
+
+echo "[deploy] ───────────────────────────────────────────────────────────"
+
 # Force NVIDIA-only Vulkan ICD to avoid conflicts with Mesa ICDs
 # Check which ICD files exist and use the first available one
 echo "[deploy] Checking Vulkan ICD files..."
