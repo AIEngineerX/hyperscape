@@ -459,6 +459,7 @@ timeout 30 google-chrome-unstable \
     --use-angle=vulkan \
     $CHROME_WEBGPU_FLAGS \
     --headless=new \
+    --allow-chrome-scheme-url \
     --enable-logging=stderr \
     --v=1 \
     --vmodule=*gpu*=2,*dawn*=2,*vulkan*=2,*webgpu*=2 \
@@ -763,74 +764,92 @@ try {
     console.log('DEBUG: Basic render failed:', e.message);
   }
 
-  // Check chrome://gpu for diagnostics
-  console.log('DEBUG: Checking chrome://gpu...');
+  // FIRST: Check navigator.gpu on about:blank (before chrome://gpu which might crash)
+  console.log('DEBUG: Checking navigator.gpu on about:blank...');
+  let gpuResult;
   try {
-    await page.goto('chrome://gpu', { timeout: 15000 });
-    await new Promise(r => setTimeout(r, 2000));  // Wait for GPU info to populate
-    const gpuStatus = await page.evaluate(() => {
-      const featureStatusList = document.getElementById('feature-status-list');
-      const basicInfo = document.getElementById('basic-info');
-      const problemsDiv = document.getElementById('problems-div');
-
-      let result = '';
-      if (featureStatusList) {
-        result += 'FEATURES: ' + featureStatusList.innerText.substring(0, 800) + '\n';
+    gpuResult = await page.evaluate(async () => {
+      // First check if navigator.gpu exists
+      if (typeof navigator === 'undefined') {
+        return { available: false, error: 'navigator is undefined', phase: 'navigator' };
       }
-      if (basicInfo) {
-        result += 'BASIC: ' + basicInfo.innerText.substring(0, 400) + '\n';
+      if (!navigator.gpu) {
+        return { available: false, error: 'navigator.gpu is undefined', phase: 'gpu_property' };
       }
-      if (problemsDiv && problemsDiv.innerText.trim()) {
-        result += 'PROBLEMS: ' + problemsDiv.innerText.substring(0, 300);
+      // navigator.gpu exists - try to get adapter
+      try {
+        console.log('DEBUG: navigator.gpu exists, requesting adapter...');
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          return { available: false, error: 'requestAdapter returned null', phase: 'adapter' };
+        }
+        const info = await adapter.requestAdapterInfo();
+        return {
+          available: true,
+          vendor: info.vendor || 'unknown',
+          architecture: info.architecture || 'unknown',
+          description: info.description || 'unknown',
+          phase: 'success'
+        };
+      } catch (e) {
+        return { available: false, error: 'requestAdapter failed: ' + e.message, phase: 'adapter_error' };
       }
-
-      // Also get full body text for debugging
-      const bodyText = document.body.innerText || '';
-      if (!result && bodyText) {
-        result = 'BODY: ' + bodyText.substring(0, 1000);
-      }
-
-      return result || 'GPU status not found (page empty)';
     });
-    console.log('DEBUG: chrome://gpu diagnostics:');
-    console.log(gpuStatus.substring(0, 1000));
+    console.log('DEBUG: WebGPU check result:', JSON.stringify(gpuResult));
   } catch (e) {
-    console.log('DEBUG: chrome://gpu failed:', e.message);
+    console.log('DEBUG: WebGPU check threw exception:', e.message);
+    gpuResult = { available: false, error: 'Exception: ' + e.message, phase: 'exception' };
   }
 
-  // Now check navigator.gpu directly on blank page
-  await page.goto('about:blank', { timeout: 10000 });
-  const gpuResult = await page.evaluate(async () => {
-    if (!navigator.gpu) {
-      return { available: false, error: 'navigator.gpu is undefined' };
-    }
-    try {
-      const adapter = await navigator.gpu.requestAdapter();
-      if (!adapter) {
-        return { available: false, error: 'requestAdapter returned null' };
-      }
-      const info = await adapter.requestAdapterInfo();
-      return {
-        available: true,
-        vendor: info.vendor,
-        architecture: info.architecture,
-        description: info.description
-      };
-    } catch (e) {
-      return { available: false, error: 'requestAdapter failed: ' + e.message };
-    }
-  });
-
+  // Output WebGPU result immediately - this is the critical test
   if (gpuResult.available) {
     console.log('WEBGPU_RESULT: SUCCESS - ' + gpuResult.vendor + ' / ' + gpuResult.description);
   } else {
-    console.log('WEBGPU_RESULT: FAILED - ' + gpuResult.error);
+    console.log('WEBGPU_RESULT: FAILED - ' + gpuResult.error + ' (phase: ' + gpuResult.phase + ')');
   }
-  await browser.close();
+
+  // OPTIONAL: Try chrome://gpu for diagnostics (may crash browser)
+  if (browser.isConnected()) {
+    console.log('DEBUG: Attempting chrome://gpu diagnostics (may crash)...');
+    try {
+      await page.goto('chrome://gpu', { timeout: 15000 });
+      await new Promise(r => setTimeout(r, 2000));
+      const gpuStatus = await page.evaluate(() => {
+        const featureStatusList = document.getElementById('feature-status-list');
+        const basicInfo = document.getElementById('basic-info');
+        const problemsDiv = document.getElementById('problems-div');
+
+        let result = '';
+        if (featureStatusList) {
+          result += 'FEATURES: ' + featureStatusList.innerText.substring(0, 800) + '\n';
+        }
+        if (basicInfo) {
+          result += 'BASIC: ' + basicInfo.innerText.substring(0, 400) + '\n';
+        }
+        if (problemsDiv && problemsDiv.innerText.trim()) {
+          result += 'PROBLEMS: ' + problemsDiv.innerText.substring(0, 300);
+        }
+        const bodyText = document.body.innerText || '';
+        if (!result && bodyText) {
+          result = 'BODY: ' + bodyText.substring(0, 1000);
+        }
+        return result || 'GPU status not found (page empty)';
+      });
+      console.log('DEBUG: chrome://gpu diagnostics:');
+      console.log(gpuStatus.substring(0, 1000));
+    } catch (e) {
+      console.log('DEBUG: chrome://gpu failed (browser may have crashed):', e.message);
+    }
+  } else {
+    console.log('DEBUG: Skipping chrome://gpu - browser already disconnected');
+  }
+
+  // Close browser and return result
+  try { await browser.close(); } catch (e) { /* browser may already be closed */ }
   process.exit(gpuResult.available ? 0 : 1);
 } catch (e) {
   console.log('DEBUG: Error caught:', e.message);
-  console.log('WEBGPU_RESULT: FAILED - ' + e.message);
+  console.log('WEBGPU_RESULT: FAILED - Exception: ' + e.message);
   process.exit(1);
 }
 PLAYWRIGHTEOF
