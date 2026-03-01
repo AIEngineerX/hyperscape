@@ -214,8 +214,13 @@ export class FollowManager {
           true, // running
           0, // meleeRange=0 for non-combat
         );
-        // Must allocate here - stored in state, needs unique object per follow
-        state.lastTargetTile = { x: previousTile.x, z: previousTile.z };
+        // MEMORY FIX: Update in-place to avoid per-tick allocations
+        if (state.lastTargetTile) {
+          state.lastTargetTile.x = previousTile.x;
+          state.lastTargetTile.z = previousTile.z;
+        } else {
+          state.lastTargetTile = { x: previousTile.x, z: previousTile.z };
+        }
       }
     }
   }

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { EmbeddedHyperscapeService } from "../EmbeddedHyperscapeService";
 
 /**
  * Minimal mock of the World event emitter used by EmbeddedHyperscapeService.
@@ -59,27 +60,7 @@ function createMockWorld() {
 }
 
 describe("EmbeddedHyperscapeService", () => {
-  let EmbeddedHyperscapeService: any;
-
-  beforeEach(async () => {
-    // Dynamic import to avoid module resolution issues in test environment
-    try {
-      const mod = await import("../EmbeddedHyperscapeService.js");
-      EmbeddedHyperscapeService = mod.EmbeddedHyperscapeService;
-    } catch {
-      // If the module can't be loaded in test context (missing deps), skip
-      EmbeddedHyperscapeService = null;
-    }
-  });
-
   it("removes all world event listeners on stop()", async () => {
-    if (!EmbeddedHyperscapeService) {
-      console.warn(
-        "[SKIP] EmbeddedHyperscapeService could not be imported in test context",
-      );
-      return;
-    }
-
     const world = createMockWorld();
     const service = new EmbeddedHyperscapeService(
       world as any,
@@ -106,10 +87,6 @@ describe("EmbeddedHyperscapeService", () => {
   });
 
   it("getNearbyEntities returns empty array when no player", () => {
-    if (!EmbeddedHyperscapeService) {
-      return;
-    }
-
     const world = createMockWorld();
     const service = new EmbeddedHyperscapeService(
       world as any,
@@ -124,10 +101,6 @@ describe("EmbeddedHyperscapeService", () => {
   });
 
   it("getGameState returns null when not active", () => {
-    if (!EmbeddedHyperscapeService) {
-      return;
-    }
-
     const world = createMockWorld();
     const service = new EmbeddedHyperscapeService(
       world as any,

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -77,9 +77,45 @@ function assertSuccess(step, result) {
   }
 }
 
+function parseLocalnetPrograms(anchorTomlPath, deployDir) {
+  const anchorToml = readFileSync(anchorTomlPath, "utf8");
+  const localnetBlockMatch = anchorToml.match(
+    /\[programs\.localnet\]([\s\S]*?)(?:\n\[|$)/,
+  );
+  if (!localnetBlockMatch) {
+    throw new Error("Unable to find [programs.localnet] block in Anchor.toml");
+  }
+
+  const programs = [];
+  for (const line of localnetBlockMatch[1].split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = trimmed.match(/^([a-zA-Z0-9_]+)\s*=\s*"([^"]+)"$/);
+    if (!match) continue;
+    const [, name, programId] = match;
+    const soPath = join(deployDir, `${name}.so`);
+    programs.push({ name, programId, soPath });
+  }
+
+  if (programs.length === 0) {
+    throw new Error("No programs found in [programs.localnet] block");
+  }
+
+  return programs;
+}
+
 async function main() {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const workspaceDir = join(scriptDir, "..");
+  const anchorTomlPath = join(workspaceDir, "Anchor.toml");
+  const targetDeployDir = join(workspaceDir, "target", "deploy");
+  const targetIdlDir = join(workspaceDir, "target", "idl");
+
+  const simulationScript = existsSync(
+    join(targetIdlDir, "hyperscape_prediction_market.json"),
+  )
+    ? "scripts/simulate-hyperscape-localnet.ts"
+    : "scripts/simulate-gold-clob-localnet.ts";
 
   const required = ["anchor", "solana-test-validator", "bun"].filter(
     (cmd) => !commandExists(cmd),
@@ -97,27 +133,7 @@ async function main() {
   const rpcUrl = `http://127.0.0.1:${rpcPort}`;
   const wsUrl = `ws://127.0.0.1:${rpcPort + 1}`;
   const ledgerDir = mkdtempSync(join(tmpdir(), "hyperscape-sim-validator-"));
-
-  const validator = spawn(
-    "solana-test-validator",
-    [
-      "--reset",
-      "--quiet",
-      "--bind-address",
-      "0.0.0.0",
-      "--rpc-port",
-      String(rpcPort),
-      "--faucet-port",
-      String(faucetPort),
-      "--ledger",
-      ledgerDir,
-    ],
-    {
-      cwd: workspaceDir,
-      stdio: "inherit",
-      env: process.env,
-    },
-  );
+  let validator = null;
 
   const stopValidator = async () => {
     if (!validator || validator.killed || validator.exitCode !== null) return;
@@ -139,21 +155,49 @@ async function main() {
 
   let exitCode = 0;
   try {
-    await waitForRpcReady(rpcUrl);
-
     const build = await runCommand("anchor", ["build"], workspaceDir);
     assertSuccess("anchor build", build);
 
-    const deploy = await runCommand(
-      "anchor",
-      ["deploy", "--provider.cluster", rpcUrl, "--", "--use-rpc"],
-      workspaceDir,
+    const localnetPrograms = parseLocalnetPrograms(
+      anchorTomlPath,
+      targetDeployDir,
     );
-    assertSuccess("anchor deploy", deploy);
+    const missingSos = localnetPrograms
+      .filter((program) => !existsSync(program.soPath))
+      .map((program) => program.soPath);
+    if (missingSos.length > 0) {
+      throw new Error(
+        `Missing deploy artifacts: ${missingSos.join(", ")}. Run anchor build.`,
+      );
+    }
+
+    const validatorArgs = [
+      "--reset",
+      "--quiet",
+      "--bind-address",
+      "0.0.0.0",
+      "--rpc-port",
+      String(rpcPort),
+      "--faucet-port",
+      String(faucetPort),
+      "--ledger",
+      ledgerDir,
+    ];
+    for (const program of localnetPrograms) {
+      validatorArgs.push("--bpf-program", program.programId, program.soPath);
+    }
+
+    validator = spawn("solana-test-validator", validatorArgs, {
+      cwd: workspaceDir,
+      stdio: "inherit",
+      env: process.env,
+    });
+
+    await waitForRpcReady(rpcUrl);
 
     const simulate = await runCommand(
       "bun",
-      ["scripts/simulate-hyperscape-localnet.ts"],
+      [simulationScript],
       workspaceDir,
       {
         ...process.env,
@@ -181,4 +225,3 @@ main().catch((error) => {
   console.error("[simulate] Fatal error:", error);
   process.exit(1);
 });
-

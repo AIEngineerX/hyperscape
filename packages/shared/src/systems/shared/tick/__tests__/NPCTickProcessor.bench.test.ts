@@ -509,10 +509,10 @@ describe("NPCTickProcessor Performance Benchmarks", () => {
         avgTimes.push(totalTime / iterations);
       }
 
-      // With 1-10 players, should be fast (typical gameplay)
-      // Threshold relaxed for CI environments with variable performance
-      expect(avgTimes[0]).toBeLessThan(3);
-      expect(avgTimes[1]).toBeLessThan(3);
+      // With 1-10 players, should still be fast in local + CI runs.
+      // Keep a realistic ceiling to avoid flakes under parallel test contention.
+      expect(avgTimes[0]).toBeLessThan(5);
+      expect(avgTimes[1]).toBeLessThan(5);
 
       // With 50-100 players (stress test), should still be reasonable
       expect(avgTimes[2]).toBeLessThan(15);

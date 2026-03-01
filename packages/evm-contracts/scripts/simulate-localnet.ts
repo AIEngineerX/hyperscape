@@ -54,10 +54,10 @@ const STRATEGIES: Strategy[] = [
 
 const WALLET_COUNT = 100;
 const ROUNDS = 4;
-const INITIAL_GOLD = 1_000_000_000n;
 const BASE_ORDER_AMOUNT = 2_000_000n;
 const HOUSE_LIQUIDITY = 200_000_000n;
 const ONE_ETH = ethers.parseEther("1");
+const AMOUNT_QUANTUM = 1_000n;
 
 function clampPrice(price: number): number {
   return Math.max(1, Math.min(999, Math.floor(price)));
@@ -89,7 +89,7 @@ function orderFromStrategy(
   const bid = Number(bestBid);
   const ask = Number(bestAsk);
   const spread = Math.max(0, ask - bid);
-  const amountBump = BigInt(Math.floor(rng() * 600_000));
+  const amountBump = BigInt(Math.floor(rng() * 600)) * AMOUNT_QUANTUM;
   const amount = BASE_ORDER_AMOUNT + amountBump;
 
   if (strategy === "always_winner") {
@@ -172,6 +172,20 @@ function orderFromStrategy(
   };
 }
 
+function quoteOrderValue(
+  amount: bigint,
+  isBuy: boolean,
+  price: number,
+  tradeTreasuryFeeBps: bigint,
+  tradeMarketMakerFeeBps: bigint,
+): bigint {
+  const priceComponent = BigInt(isBuy ? price : 1000 - price);
+  const cost = (amount * priceComponent) / 1000n;
+  const treasuryFee = (cost * tradeTreasuryFeeBps) / 10_000n;
+  const marketMakerFee = (cost * tradeMarketMakerFeeBps) / 10_000n;
+  return cost + treasuryFee + marketMakerFee;
+}
+
 async function main() {
   const [admin, treasury, houseBidSigner, houseAskSigner] =
     await ethers.getSigners();
@@ -186,18 +200,12 @@ async function main() {
     claimFailures: 0,
   };
 
-  const MockERC20 = await ethers.getContractFactory("MockERC20");
-  const token = await MockERC20.deploy("Gold", "GOLD");
-  await token.waitForDeployment();
-
   const GoldClob = await ethers.getContractFactory("GoldClob");
-  const clob = await GoldClob.deploy(
-    await token.getAddress(),
-    treasury.address,
-    houseBidSigner.address,
-  );
+  const clob = await GoldClob.deploy(treasury.address, houseBidSigner.address);
   await clob.waitForDeployment();
   const clobAddress = await clob.getAddress();
+  const tradeTreasuryFeeBps = BigInt(await clob.tradeTreasuryFeeBps());
+  const tradeMarketMakerFeeBps = BigInt(await clob.tradeMarketMakerFeeBps());
 
   async function sendTx(
     txPromise: Promise<{
@@ -221,23 +229,12 @@ async function main() {
   for (let i = 0; i < WALLET_COUNT; i += 1) {
     const wallet = ethers.Wallet.createRandom().connect(ethers.provider);
     await sendTx(admin.sendTransaction({ to: wallet.address, value: ONE_ETH }));
-    await sendTx(token.mint(wallet.address, INITIAL_GOLD));
-    await sendTx(token.connect(wallet).approve(clobAddress, ethers.MaxUint256));
     bettors.push({
       wallet,
       strategy: STRATEGIES[i % STRATEGIES.length],
-      initialBalance: await token.balanceOf(wallet.address),
+      initialBalance: await ethers.provider.getBalance(wallet.address),
     });
   }
-
-  await sendTx(token.mint(houseBidSigner.address, INITIAL_GOLD * 40n));
-  await sendTx(token.mint(houseAskSigner.address, INITIAL_GOLD * 40n));
-  await sendTx(
-    token.connect(houseBidSigner).approve(clobAddress, ethers.MaxUint256),
-  );
-  await sendTx(
-    token.connect(houseAskSigner).approve(clobAddress, ethers.MaxUint256),
-  );
 
   const rng = createRng(0x5eedn);
 
@@ -249,15 +246,33 @@ async function main() {
     const houseBias = round % 2 === 0 ? "YES" : "NO";
     const roundBetters = new Set<string>();
 
+    const houseBidValue = quoteOrderValue(
+      HOUSE_LIQUIDITY,
+      true,
+      400,
+      tradeTreasuryFeeBps,
+      tradeMarketMakerFeeBps,
+    );
     await sendTx(
       clob
         .connect(houseBidSigner)
-        .placeOrder(matchId, true, 400, HOUSE_LIQUIDITY),
+        .placeOrder(matchId, true, 400, HOUSE_LIQUIDITY, {
+          value: houseBidValue,
+        }),
+    );
+    const houseAskValue = quoteOrderValue(
+      HOUSE_LIQUIDITY,
+      false,
+      600,
+      tradeTreasuryFeeBps,
+      tradeMarketMakerFeeBps,
     );
     await sendTx(
       clob
         .connect(houseAskSigner)
-        .placeOrder(matchId, false, 600, HOUSE_LIQUIDITY),
+        .placeOrder(matchId, false, 600, HOUSE_LIQUIDITY, {
+          value: houseAskValue,
+        }),
     );
 
     for (const bettor of bettors) {
@@ -291,10 +306,19 @@ async function main() {
       for (const order of candidates) {
         executionStats.betAttempts += 1;
         try {
+          const orderValue = quoteOrderValue(
+            order.amount,
+            order.isBuy,
+            order.price,
+            tradeTreasuryFeeBps,
+            tradeMarketMakerFeeBps,
+          );
           await sendTx(
             clob
               .connect(bettor.wallet)
-              .placeOrder(matchId, order.isBuy, order.price, order.amount),
+              .placeOrder(matchId, order.isBuy, order.price, order.amount, {
+                value: orderValue,
+              }),
           );
           executionStats.betSuccess += 1;
           roundBetters.add(bettor.wallet.address);
@@ -355,7 +379,9 @@ async function main() {
 
   const walletPnl: WalletPnl[] = [];
   for (const bettor of bettors) {
-    const finalBalance = await token.balanceOf(bettor.wallet.address);
+    const finalBalance = await ethers.provider.getBalance(
+      bettor.wallet.address,
+    );
     walletPnl.push({
       address: bettor.wallet.address,
       strategy: bettor.strategy,
@@ -405,8 +431,8 @@ async function main() {
     wallets: WALLET_COUNT,
     rounds: ROUNDS,
     contract: {
-      goldToken: await token.getAddress(),
       clob: clobAddress,
+      asset: "native",
     },
     chainVerification: {
       transactionsSubmitted: txHashes.length,

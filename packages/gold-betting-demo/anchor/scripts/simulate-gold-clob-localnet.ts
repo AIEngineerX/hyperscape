@@ -612,7 +612,7 @@ async function main() {
 
   const outputDir = join(workspaceDir, "simulations");
   mkdirSync(outputDir, { recursive: true });
-  const outputPath = join(outputDir, "solana-clob-localnet-pnl.json");
+  const outputPath = join(outputDir, "solana-localnet-pnl.json");
   writeFileSync(outputPath, JSON.stringify(report, null, 2));
 
   console.log("\n=== Solana CLOB Localnet Simulation Complete ===");

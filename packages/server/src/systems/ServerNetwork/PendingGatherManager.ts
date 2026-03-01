@@ -86,6 +86,8 @@ export class PendingGatherManager {
   /** Pre-allocated tile buffers (zero-allocation hot path) */
   private readonly _playerTile: TileCoord = { x: 0, z: 0 };
   private readonly _resourceTile: TileCoord = { x: 0, z: 0 };
+  /** Pre-allocated tile for footprint iteration to avoid per-check allocations */
+  private readonly _tempFootprintTile: TileCoord = { x: 0, z: 0 };
 
   constructor(
     world: World,
@@ -566,17 +568,16 @@ export class PendingGatherManager {
   ): boolean {
     // For multi-tile resources, we need to check all tiles the resource occupies
     // Player must be cardinally adjacent to ANY tile of the resource
+    // MEMORY FIX: Use pre-allocated tile to avoid per-iteration allocations
     for (let ox = 0; ox < footprintX; ox++) {
       for (let oz = 0; oz < footprintZ; oz++) {
-        const resourceTile = {
-          x: resourceAnchor.x + ox,
-          z: resourceAnchor.z + oz,
-        };
+        this._tempFootprintTile.x = resourceAnchor.x + ox;
+        this._tempFootprintTile.z = resourceAnchor.z + oz;
         // tilesWithinMeleeRange with GATHERING_RANGE checks cardinal-only
         if (
           tilesWithinMeleeRange(
             playerTile,
-            resourceTile,
+            this._tempFootprintTile,
             GATHERING_CONSTANTS.GATHERING_RANGE,
           )
         ) {

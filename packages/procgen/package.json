@@ -63,7 +63,7 @@
   "scripts": {
     "dev": "tsc --watch",
     "build": "tsc || echo '⚠️ tsc had errors (likely circular dep), continuing...'",
-    "test": "vitest run --passWithNoTests",
+    "test": "bun run --cwd ../impostors build && vitest run --passWithNoTests",
     "test:watch": "vitest",
     "lint": "eslint src --max-warnings 50",
     "typecheck": "tsc --noEmit",

@@ -154,6 +154,9 @@ export class MobTileMovementManager {
   /** Reusable tile for target occupied tile in onTick collision check */
   private readonly _targetOccupiedTile: TileCoord = { x: 0, z: 0 };
 
+  /** Pre-allocated position for closure capture in chase path calculation (avoids per-step allocation) */
+  private readonly _closurePos: TileCoord = { x: 0, z: 0 };
+
   /**
    * Destination claims for current tick (prevents multiple mobs targeting same tile)
    *
@@ -416,13 +419,11 @@ export class MobTileMovementManager {
       : null;
 
     for (let step = 0; step < tilesPerTick; step++) {
-      // Create closure that captures current position for wall blocking checks
-      const currentPos = {
-        x: this._currentPosTile.x,
-        z: this._currentPosTile.z,
-      };
+      // Zero-allocation: copy to pre-allocated closure position buffer
+      this._closurePos.x = this._currentPosTile.x;
+      this._closurePos.z = this._currentPosTile.z;
       const nextTile = chaseStep(this._currentPosTile, targetTile, (tile) =>
-        this.isTileWalkable(tile, currentPos),
+        this.isTileWalkable(tile, this._closurePos),
       );
 
       if (!nextTile) break; // Blocked
@@ -707,16 +708,13 @@ export class MobTileMovementManager {
 
           for (let step = 0; step < state.tilesPerTick; step++) {
             // Check if this step would put us in combat range (path toward destination tile, not player)
-            // Zero-allocation: use pre-allocated ChasePathfinder
-            // Create closure that captures current position for wall blocking checks
-            const currentPos = {
-              x: this._currentPosTile.x,
-              z: this._currentPosTile.z,
-            };
+            // Zero-allocation: copy to pre-allocated closure position buffer
+            this._closurePos.x = this._currentPosTile.x;
+            this._closurePos.z = this._currentPosTile.z;
             const nextTile = this._chasePathfinder.chaseStep(
               this._currentPosTile,
               destinationTile,
-              (tile) => this.isTileWalkable(tile, currentPos),
+              (tile) => this.isTileWalkable(tile, this._closurePos),
             );
 
             if (!nextTile) {
@@ -1138,15 +1136,13 @@ export class MobTileMovementManager {
         }
 
         for (let step = 0; step < state.tilesPerTick; step++) {
-          // Create closure that captures current position for wall blocking checks
-          const currentPos = {
-            x: this._currentPosTile.x,
-            z: this._currentPosTile.z,
-          };
+          // Zero-allocation: copy to pre-allocated closure position buffer
+          this._closurePos.x = this._currentPosTile.x;
+          this._closurePos.z = this._currentPosTile.z;
           const nextTile = chaseStep(
             this._currentPosTile,
             destinationTile,
-            (tile) => this.isTileWalkable(tile, currentPos),
+            (tile) => this.isTileWalkable(tile, this._closurePos),
           );
 
           if (!nextTile) break;
