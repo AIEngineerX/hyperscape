@@ -43,7 +43,7 @@ function runCommand(command, args, cwd, env = process.env) {
   });
 }
 
-async function waitForRpcReady(rpcUrl, timeoutMs = 30_000) {
+async function waitForRpcReady(rpcUrl, timeoutMs = 120_000) {
   const payload = {
     jsonrpc: "2.0",
     id: 1,
@@ -109,13 +109,25 @@ async function main() {
   const workspaceDir = join(scriptDir, "..");
   const anchorTomlPath = join(workspaceDir, "Anchor.toml");
   const targetDeployDir = join(workspaceDir, "target", "deploy");
-  const targetIdlDir = join(workspaceDir, "target", "idl");
 
-  const simulationScript = existsSync(
-    join(targetIdlDir, "hyperscape_prediction_market.json"),
-  )
-    ? "scripts/simulate-hyperscape-localnet.ts"
-    : "scripts/simulate-gold-clob-localnet.ts";
+  const simulationMode = (
+    process.env.BETTING_SOLANA_SIM_MODE ?? "native"
+  ).toLowerCase();
+  const simulationScript =
+    simulationMode === "spl"
+      ? "./scripts/simulate-hyperscape-localnet.ts"
+      : "./scripts/simulate-gold-clob-localnet.ts";
+  if (simulationMode !== "native" && simulationMode !== "spl") {
+    throw new Error(
+      `Invalid BETTING_SOLANA_SIM_MODE='${simulationMode}'. Use 'native' or 'spl'.`,
+    );
+  }
+  if (!existsSync(join(workspaceDir, simulationScript))) {
+    throw new Error(`Simulation script not found: ${simulationScript}`);
+  }
+  console.log(
+    `[simulate] mode=${simulationMode} script=${simulationScript} rpc=dynamic`,
+  );
 
   const required = ["anchor", "solana-test-validator", "bun"].filter(
     (cmd) => !commandExists(cmd),
@@ -173,7 +185,6 @@ async function main() {
 
     const validatorArgs = [
       "--reset",
-      "--quiet",
       "--bind-address",
       "0.0.0.0",
       "--rpc-port",
