@@ -81,29 +81,8 @@ function withViewerAccessToken(rawUrl: string): string {
   }
 }
 
-function withRendererCaptureHints(rawUrl: string): string {
-  const disableWebGPU = /^(1|true|yes|on)$/i.test(
-    process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "",
-  );
-  if (!disableWebGPU) return rawUrl;
-  try {
-    const url = new URL(rawUrl);
-    // Ensure frontend renderer policy matches capture browser flags.
-    url.searchParams.set("forceWebGL", "1");
-    url.searchParams.set("disableWebGPU", "1");
-    return url.toString();
-  } catch {
-    const separator = rawUrl.includes("?") ? "&" : "?";
-    return `${rawUrl}${separator}forceWebGL=1&disableWebGPU=1`;
-  }
-}
-
 const GAME_URL_CANDIDATES = Array.from(
-  new Set(
-    [GAME_URL, ...GAME_FALLBACK_URLS]
-      .map(withViewerAccessToken)
-      .map(withRendererCaptureHints),
-  ),
+  new Set([GAME_URL, ...GAME_FALLBACK_URLS].map(withViewerAccessToken)),
 );
 
 const BRIDGE_PORT = parseInt(process.env.RTMP_BRIDGE_PORT || "8765", 10);
@@ -125,6 +104,11 @@ const ANGLE_BACKEND =
 const STREAM_CAPTURE_DISABLE_WEBGPU = /^(1|true|yes|on)$/i.test(
   process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "",
 );
+if (STREAM_CAPTURE_DISABLE_WEBGPU) {
+  throw new Error(
+    "STREAM_CAPTURE_DISABLE_WEBGPU is not supported. Hyperscape capture is WebGPU-only.",
+  );
+}
 const CDP_QUALITY = Math.min(
   100,
   Math.max(1, parseInt(process.env.STREAM_CDP_QUALITY || "80", 10)),
@@ -352,9 +336,7 @@ async function waitForStreamReadiness(
 // ── Browser Launch ─────────────────────────────────────────────────────────
 
 async function launchCaptureBrowser() {
-  const featureFlags = STREAM_CAPTURE_DISABLE_WEBGPU
-    ? "--enable-features=UseSkiaRenderer"
-    : "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
+  const featureFlags = "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
   const launchConfig = {
     headless: STREAM_CAPTURE_HEADLESS,
     args: [
@@ -362,9 +344,7 @@ async function launchCaptureBrowser() {
       "--use-gl=angle",
       `--use-angle=${ANGLE_BACKEND}`,
       "--enable-webgl",
-      ...(STREAM_CAPTURE_DISABLE_WEBGPU
-        ? ["--disable-webgpu"]
-        : ["--enable-unsafe-webgpu"]),
+      "--enable-unsafe-webgpu",
       featureFlags,
       "--ignore-gpu-blocklist",
       "--enable-gpu-rasterization",
