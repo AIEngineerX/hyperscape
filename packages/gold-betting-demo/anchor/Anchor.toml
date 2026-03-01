@@ -23,6 +23,9 @@ gold_perps_market = "3WKQf3J4B8QqRyWcBLR7xrb9VFPVjkZwzyZS67AahDbK"
 [registry]
 url = "https://api.apr.dev"
 
+[test]
+startup_wait = 60000
+
 [provider]
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"

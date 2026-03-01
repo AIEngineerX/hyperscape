@@ -86,6 +86,12 @@ export class TradingSystem {
   /** Cleanup interval handle */
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
+  /** Tracked event listeners for proper cleanup */
+  private readonly eventListeners: Array<{
+    event: string;
+    handler: (...args: unknown[]) => void;
+  }> = [];
+
   constructor(world: World) {
     this.world = world;
   }
@@ -100,23 +106,38 @@ export class TradingSystem {
     }, 10_000); // Check every 10 seconds
 
     // Subscribe to player disconnect events to clean up trades
-    this.world.on(EventType.PLAYER_LEFT, (payload: unknown) => {
+    const onPlayerLeft = (payload: unknown): void => {
       const data = payload as { playerId: string };
       this.handlePlayerDisconnect(data.playerId);
+    };
+    this.world.on(EventType.PLAYER_LEFT, onPlayerLeft);
+    this.eventListeners.push({
+      event: EventType.PLAYER_LEFT,
+      handler: onPlayerLeft,
     });
 
-    this.world.on(EventType.PLAYER_LOGOUT, (payload: unknown) => {
+    const onPlayerLogout = (payload: unknown): void => {
       const data = payload as { playerId: string };
       this.handlePlayerDisconnect(data.playerId);
+    };
+    this.world.on(EventType.PLAYER_LOGOUT, onPlayerLogout);
+    this.eventListeners.push({
+      event: EventType.PLAYER_LOGOUT,
+      handler: onPlayerLogout,
     });
 
     // Subscribe to player death to cancel active trades
-    this.world.on(EventType.PLAYER_DIED, (payload: unknown) => {
+    const onPlayerDied = (payload: unknown): void => {
       const data = payload as { playerId: string };
       const tradeId = this.getPlayerTradeId(data.playerId);
       if (tradeId) {
         this.cancelTrade(tradeId, "player_died");
       }
+    };
+    this.world.on(EventType.PLAYER_DIED, onPlayerDied);
+    this.eventListeners.push({
+      event: EventType.PLAYER_DIED,
+      handler: onPlayerDied,
     });
   }
 
@@ -128,6 +149,25 @@ export class TradingSystem {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
     }
+
+    // Unsubscribe all event listeners to prevent memory leaks
+    const worldWithListenerRemoval = this.world as unknown as {
+      off?: (event: string, handler: (...args: unknown[]) => void) => void;
+      removeListener?: (
+        event: string,
+        handler: (...args: unknown[]) => void,
+      ) => void;
+    };
+    for (const { event, handler } of this.eventListeners) {
+      if (typeof worldWithListenerRemoval.off === "function") {
+        worldWithListenerRemoval.off(event, handler);
+      } else if (
+        typeof worldWithListenerRemoval.removeListener === "function"
+      ) {
+        worldWithListenerRemoval.removeListener(event, handler);
+      }
+    }
+    this.eventListeners.length = 0;
 
     // Cancel all active trades
     for (const [tradeId] of this.tradeSessions) {

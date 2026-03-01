@@ -262,6 +262,8 @@ export class AgentManager {
   private isShuttingDown: boolean = false;
   private readonly behaviorTicker: AgentBehaviorTicker;
   private readonly commandDispatcher: AgentCommandDispatcher;
+  private readonly combatDamageListener: (data: unknown) => void;
+  private worldListenerActive: boolean = false;
 
   constructor(world: World) {
     this.world = world;
@@ -274,12 +276,23 @@ export class AgentManager {
       this.agents.get(id),
     );
 
-    // Subscribe to combat events for chat reactions
-    this.world.on(EventType.COMBAT_DAMAGE_DEALT, (data: unknown) => {
+    this.combatDamageListener = (data: unknown) => {
       this.behaviorTicker.handleCombatDamageDealt(data);
-    });
+    };
+    this.world.on(EventType.COMBAT_DAMAGE_DEALT, this.combatDamageListener);
+    this.worldListenerActive = true;
 
     console.log("[AgentManager] Initialized with combat chat reactions");
+  }
+
+  /**
+   * Dispose long-lived world listeners.
+   * Used on shutdown and during manager replacement in dev/hot-reload flows.
+   */
+  dispose(): void {
+    if (!this.worldListenerActive) return;
+    this.world.off(EventType.COMBAT_DAMAGE_DEALT, this.combatDamageListener);
+    this.worldListenerActive = false;
   }
 
   // ─── LIFECYCLE ──────────────────────────────────────────────────────
@@ -760,6 +773,7 @@ export class AgentManager {
 
     await Promise.all(stopPromises);
 
+    this.dispose();
     this.agents.clear();
     console.log("[AgentManager] All agents shut down");
   }
@@ -781,5 +795,8 @@ export function getAgentManager(): AgentManager | null {
  * Set the global agent manager instance (called during startup)
  */
 export function setAgentManager(manager: AgentManager): void {
+  if (globalAgentManager && globalAgentManager !== manager) {
+    globalAgentManager.dispose();
+  }
   globalAgentManager = manager;
 }

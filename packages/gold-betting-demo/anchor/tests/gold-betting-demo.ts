@@ -10,6 +10,7 @@ import {
 import {
   ACCOUNT_SIZE,
   TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccount,
   createInitializeAccountInstruction,
   createAccount,
   createMint,
@@ -455,6 +456,157 @@ describe("gold_clob_market", () => {
     assert.ok(
       invalidWinnerMessage.includes("InvalidWinner") ||
         invalidWinnerMessage.includes("Winner must be YES (1) or NO (2)"),
+    );
+  });
+});
+
+import { GoldPerpsMarket } from "../target/types/gold_perps_market";
+
+describe("gold_perps_market", () => {
+  const provider = anchor.AnchorProvider.env();
+  const perpsProgram = anchor.workspace
+    .GoldPerpsMarket as Program<GoldPerpsMarket>;
+
+  it("initializes vault and processes open_position with skew", async () => {
+    const payer = (provider.wallet as anchor.Wallet & { payer: Keypair }).payer;
+
+    const goldMint = await createMint(
+      provider.connection,
+      payer,
+      payer.publicKey,
+      null,
+      DECIMALS,
+      undefined,
+      undefined,
+      TOKEN_PROGRAM_ID,
+    );
+
+    const [vaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault")],
+      perpsProgram.programId,
+    );
+
+    const vaultTokenAccount = await createAssociatedTokenAccount(
+      provider.connection,
+      payer,
+      goldMint,
+      vaultPda,
+      undefined,
+      TOKEN_PROGRAM_ID,
+      undefined,
+      true,
+    );
+
+    // 1 million as ONE (skew scale)
+    const SKEW_SCALE = new anchor.BN(1_000_000);
+    const FUNDING_VELOCITY = new anchor.BN(1000); // minor drift
+
+    const existingVault =
+      await perpsProgram.account.vaultState.fetchNullable(vaultPda);
+    if (!existingVault) {
+      await perpsProgram.methods
+        .initializeVault(SKEW_SCALE, FUNDING_VELOCITY)
+        .accountsPartial({
+          vault: vaultPda,
+          authority: payer.publicKey,
+          goldMint: goldMint,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+    }
+
+    const vaultAccount = await perpsProgram.account.vaultState.fetch(vaultPda);
+    assert.strictEqual(
+      vaultAccount.skewScale.toString(),
+      SKEW_SCALE.toString(),
+    );
+
+    const agentId = 123;
+    const [oraclePda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("oracle"),
+        new anchor.BN(agentId).toArrayLike(Buffer, "le", 4),
+      ],
+      perpsProgram.programId,
+    );
+
+    await perpsProgram.methods
+      .updateOracle(
+        agentId,
+        new anchor.BN(100),
+        new anchor.BN(1500),
+        new anchor.BN(200),
+      )
+      .accountsPartial({
+        oracle: oraclePda,
+        vault: vaultPda,
+        authority: payer.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    // Trader Alice tries to open a Long
+    const alice = Keypair.generate();
+    await airdrop(provider.connection, alice.publicKey);
+
+    const aliceTokenAccount = await createAccount(
+      provider.connection,
+      payer,
+      goldMint,
+      alice.publicKey,
+      undefined,
+      undefined,
+      TOKEN_PROGRAM_ID,
+    );
+
+    const collateral = 50_000;
+    await mintTo(
+      provider.connection,
+      payer,
+      goldMint,
+      aliceTokenAccount,
+      payer,
+      collateral,
+      [],
+      undefined,
+      TOKEN_PROGRAM_ID,
+    );
+
+    const [positionPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("position"),
+        alice.publicKey.toBuffer(),
+        new anchor.BN(agentId).toArrayLike(Buffer, "le", 4),
+      ],
+      perpsProgram.programId,
+    );
+
+    await perpsProgram.methods
+      .openPosition(agentId, 0, new anchor.BN(collateral), new anchor.BN(2)) // 2x Leveraged Long
+      .accountsPartial({
+        position: positionPda,
+        trader: alice.publicKey,
+        traderTokenAccount: aliceTokenAccount,
+        vaultTokenAccount: vaultTokenAccount,
+        oracle: oraclePda,
+        vault: vaultPda,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([alice])
+      .rpc();
+
+    const positionAcc =
+      await perpsProgram.account.positionState.fetch(positionPda);
+    assert.strictEqual(
+      positionAcc.size.toString(),
+      (collateral * 2).toString(),
+      "Size should be 2x collateral",
+    );
+    // Original index was 100. Skew premium should push entry price slightly above 100.
+    assert.ok(
+      positionAcc.entryPrice.toNumber() > 100,
+      "Skew premium must increase the execution price for longs",
     );
   });
 });

@@ -99,10 +99,13 @@ describe("gold_perps_market", () => {
   });
 
   it("Is initialized!", async () => {
+    // 1 million as ONE (skew scale)
+    const SKEW_SCALE = new anchor.BN(1_000_000);
+    const FUNDING_VELOCITY = new anchor.BN(1000); // minor drift
+
     await program.methods
-      .initializeVault()
-      // @ts-ignore
-      .accounts({
+      .initializeVault(SKEW_SCALE, FUNDING_VELOCITY)
+      .accountsPartial({
         vault: vaultPda,
         authority: authority.publicKey,
         goldMint,
@@ -122,9 +125,9 @@ describe("gold_perps_market", () => {
 
     await program.methods
       .updateOracle(agentId, spotIndex, mu, sigma)
-      // @ts-ignore
-      .accounts({
+      .accountsPartial({
         oracle: oraclePda,
+        vault: vaultPda,
         authority: authority.publicKey,
         systemProgram: SystemProgram.programId,
       })
@@ -141,13 +144,13 @@ describe("gold_perps_market", () => {
 
     await program.methods
       .openPosition(agentId, 0, collateral, leverage)
-      // @ts-ignore
-      .accounts({
+      .accountsPartial({
         position: positionPda,
         trader: trader.publicKey,
         traderTokenAccount,
         vaultTokenAccount,
         oracle: oraclePda,
+        vault: vaultPda,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
@@ -171,6 +174,7 @@ describe("gold_perps_market", () => {
       // @ts-ignore
       .accounts({
         oracle: oraclePda,
+        vault: vaultPda,
         authority: authority.publicKey,
         systemProgram: SystemProgram.programId,
       })
@@ -180,10 +184,10 @@ describe("gold_perps_market", () => {
     // Liquidation would be here
     await program.methods
       .liquidate()
-      // @ts-ignore
-      .accounts({
+      .accountsPartial({
         position: positionPda,
         oracle: oraclePda,
+        vault: vaultPda,
       })
       .rpc();
   });

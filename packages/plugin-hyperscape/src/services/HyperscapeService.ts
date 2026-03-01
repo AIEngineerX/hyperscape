@@ -1052,11 +1052,13 @@ Respond with ONLY the action name, nothing else.`;
     this.stopAutonomousBehavior();
 
     if (this.reconnectInterval) {
-      clearInterval(this.reconnectInterval);
+      clearTimeout(this.reconnectInterval);
       this.reconnectInterval = null;
     }
 
     await this.disconnect();
+    this.eventHandlers.clear();
+    this.chatProcessingChain = Promise.resolve();
 
     // Clear this runtime's instance from the map
     const runtimeId = this.runtime.agentId;
@@ -1505,8 +1507,18 @@ Respond with ONLY the action name, nothing else.`;
     const wasAutoReconnect = this.autoReconnect;
     this.autoReconnect = false;
 
+    if (this.reconnectInterval) {
+      clearTimeout(this.reconnectInterval);
+      this.reconnectInterval = null;
+    }
+
     if (this.ws) {
-      this.ws.close(); // Code 1000 - normal closure, won't reconnect
+      try {
+        this.ws.removeAllListeners();
+        this.ws.close(); // Code 1000 - normal closure, won't reconnect
+      } catch {
+        // Ignore cleanup errors from stale sockets
+      }
       this.ws = null;
     }
 
@@ -2880,10 +2892,18 @@ Respond with ONLY the action name, nothing else.`;
     eventType: EventType,
     handler: (data: unknown) => void | Promise<void>,
   ): void {
-    if (!this.eventHandlers.has(eventType)) {
-      this.eventHandlers.set(eventType, []);
+    const handlers = this.eventHandlers.get(eventType);
+    if (!handlers) {
+      this.eventHandlers.set(eventType, [handler]);
+      return;
     }
-    this.eventHandlers.get(eventType)!.push(handler);
+
+    // Prevent duplicate registrations for the same handler function.
+    if (handlers.includes(handler)) {
+      return;
+    }
+
+    handlers.push(handler);
   }
 
   /**
@@ -2898,6 +2918,9 @@ Respond with ONLY the action name, nothing else.`;
       const index = handlers.indexOf(handler);
       if (index !== -1) {
         handlers.splice(index, 1);
+      }
+      if (handlers.length === 0) {
+        this.eventHandlers.delete(eventType);
       }
     }
   }

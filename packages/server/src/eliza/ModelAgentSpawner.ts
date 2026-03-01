@@ -312,7 +312,7 @@ export async function spawnModelAgents(
 
   // Load shared plugins
   const modelAgentSqlEnabled = !/^(0|false|no|off)$/i.test(
-    process.env.MODEL_AGENT_SQL_ENABLED || "true",
+    process.env.MODEL_AGENT_SQL_ENABLED || "false",
   );
   const sqlPlugin = modelAgentSqlEnabled
     ? await loadSqlPlugin("ModelAgentSpawner")

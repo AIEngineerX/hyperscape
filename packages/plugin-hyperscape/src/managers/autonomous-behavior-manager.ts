@@ -209,6 +209,7 @@ export class AutonomousBehaviorManager {
   private readonly CRITICAL_HIT_THRESHOLD = 0.3; // 30% of max health
   private readonly NEAR_DEATH_THRESHOLD = 0.2; // 20% of current health
   private combatEventHandlerRegistered = false;
+  private combatEventHandler: ((data: unknown) => void) | null = null;
 
   constructor(runtime: IAgentRuntime, config?: AutonomousBehaviorConfig) {
     this.runtime = runtime;
@@ -326,9 +327,10 @@ export class AutonomousBehaviorManager {
 
     // Subscribe to combat events for chat reactions
     if (!this.combatEventHandlerRegistered) {
-      this.service.onGameEvent("COMBAT_DAMAGE_DEALT", (data: unknown) => {
+      this.combatEventHandler = (data: unknown) => {
         this.handleCombatDamageEvent(data);
-      });
+      };
+      this.service.onGameEvent("COMBAT_DAMAGE_DEALT", this.combatEventHandler);
       this.combatEventHandlerRegistered = true;
       logger.info(
         "[AutonomousBehavior] Registered combat chat reaction handler",
@@ -343,6 +345,8 @@ export class AutonomousBehaviorManager {
         err instanceof Error ? err.message : String(err),
       );
       this.isRunning = false;
+      this.unregisterCombatEventHandler();
+      this.service = null;
     });
   }
 
@@ -350,13 +354,29 @@ export class AutonomousBehaviorManager {
    * Stop autonomous behavior
    */
   stop(): void {
-    if (!this.isRunning) {
-      logger.warn("[AutonomousBehavior] Not running, ignoring stop");
-      return;
+    if (this.isRunning) {
+      logger.info("[AutonomousBehavior] Stopping autonomous behavior...");
+    } else {
+      logger.warn("[AutonomousBehavior] Not running, cleaning up listeners");
     }
 
-    logger.info("[AutonomousBehavior] Stopping autonomous behavior...");
     this.isRunning = false;
+    this.unregisterCombatEventHandler();
+    this.pendingChatReaction = null;
+    this.service = null;
+  }
+
+  private unregisterCombatEventHandler(): void {
+    if (
+      this.service &&
+      this.combatEventHandlerRegistered &&
+      this.combatEventHandler
+    ) {
+      this.service.offGameEvent("COMBAT_DAMAGE_DEALT", this.combatEventHandler);
+    }
+
+    this.combatEventHandlerRegistered = false;
+    this.combatEventHandler = null;
   }
 
   /**
