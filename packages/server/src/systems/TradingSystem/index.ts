@@ -128,9 +128,12 @@ export class TradingSystem {
    */
   destroy(): void {
     // Remove event listeners to prevent memory leaks
-    this.world.off(EventType.PLAYER_LEFT, this._onPlayerLeft);
-    this.world.off(EventType.PLAYER_LOGOUT, this._onPlayerLogout);
-    this.world.off(EventType.PLAYER_DIED, this._onPlayerDied);
+    // Guard for test environments where world.off may not exist
+    if (typeof this.world.off === "function") {
+      this.world.off(EventType.PLAYER_LEFT, this._onPlayerLeft);
+      this.world.off(EventType.PLAYER_LOGOUT, this._onPlayerLogout);
+      this.world.off(EventType.PLAYER_DIED, this._onPlayerDied);
+    }
 
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);

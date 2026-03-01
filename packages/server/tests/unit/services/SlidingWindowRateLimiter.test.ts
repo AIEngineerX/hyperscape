@@ -237,11 +237,11 @@ describe("SlidingWindowRateLimiter", () => {
       expect(limiter.check("player")).toBe(false);
     });
 
-    it("getPathfindRateLimiter returns singleton with 5/sec limit", () => {
+    it("getPathfindRateLimiter returns singleton with 15/sec limit", () => {
       const limiter = getPathfindRateLimiter();
       expect(limiter.name).toBe("pathfinding");
 
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 15; i++) {
         expect(limiter.check("player")).toBe(true);
       }
       expect(limiter.check("player")).toBe(false);
