@@ -336,7 +336,10 @@ async function waitForStreamReadiness(
         const normalizedText = text.toLowerCase();
         const hasStreamingBootUi =
           normalizedText.includes("waiting for duel data") ||
-          normalizedText.includes("initializing world systems");
+          normalizedText.includes("initializing world systems") ||
+          normalizedText.includes("initializing") ||
+          normalizedText.includes("loading assets") ||
+          normalizedText.includes("finalizing");
         return {
           hasCanvas: document.querySelector("canvas") !== null,
           readyFlag: win.__HYPERSCAPE_STREAM_READY__ === true,
