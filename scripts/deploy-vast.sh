@@ -442,19 +442,69 @@ WEBGPU_WORKING="false"
 CHROME_GPU_FLAGS="--no-sandbox --disable-gpu-sandbox --disable-setuid-sandbox --disable-dev-shm-usage"
 CHROME_WEBGPU_FLAGS="--enable-unsafe-webgpu --enable-features=Vulkan,UseSkiaRenderer,WebGPU --ignore-gpu-blocklist --disable-software-rasterizer --disable-gpu-driver-bug-workarounds"
 
-# First, dump chrome://gpu diagnostics to understand GPU status
-echo "[deploy] Capturing chrome://gpu diagnostics..."
+# Set up X11 authentication for Chrome (needed for Xvfb connection)
+export XAUTHORITY=/tmp/.Xauthority
+touch "$XAUTHORITY"
+
+# First, capture detailed Chrome GPU process logs to stderr
+echo "[deploy] ═══════════════════════════════════════════════════════════"
+echo "[deploy] Capturing detailed Chrome GPU diagnostics..."
+echo "[deploy] ═══════════════════════════════════════════════════════════"
+
+# Test with verbose logging to see GPU process initialization
+echo "[deploy] Running Chrome with verbose GPU logging..."
 timeout 30 google-chrome-unstable \
     $CHROME_GPU_FLAGS \
     --use-gl=angle \
     --use-angle=vulkan \
     $CHROME_WEBGPU_FLAGS \
     --headless=new \
+    --enable-logging=stderr \
+    --v=1 \
+    --vmodule=*gpu*=2,*dawn*=2,*vulkan*=2,*webgpu*=2 \
     --dump-dom \
-    --virtual-time-budget=3000 \
-    "chrome://gpu" 2>&1 | head -100 > /tmp/chrome-gpu-info.txt || true
-echo "[deploy] chrome://gpu output (first 50 lines):"
-head -50 /tmp/chrome-gpu-info.txt 2>/dev/null || echo "[deploy] Could not capture chrome://gpu"
+    --virtual-time-budget=5000 \
+    "chrome://gpu" 2>&1 | tee /tmp/chrome-gpu-verbose.txt | head -200 || true
+
+echo "[deploy] Chrome GPU verbose log (first 100 lines):"
+head -100 /tmp/chrome-gpu-verbose.txt 2>/dev/null || echo "[deploy] No verbose output captured"
+
+# Extract key GPU errors from the log
+echo "[deploy] ───────────────────────────────────────────────────────────"
+echo "[deploy] GPU-related errors/warnings:"
+grep -iE "(gpu|vulkan|dawn|webgpu|adapter|device|error|fail|crash)" /tmp/chrome-gpu-verbose.txt 2>/dev/null | head -30 || echo "[deploy] No GPU errors found in log"
+echo "[deploy] ───────────────────────────────────────────────────────────"
+
+# Verify X11 display is accessible (critical for non-headless Chrome)
+if [ -n "$DISPLAY" ]; then
+    echo "[deploy] Testing X11 display connection..."
+    if command -v xdpyinfo &>/dev/null; then
+        xdpyinfo -display "$DISPLAY" 2>&1 | head -5 || echo "[deploy] xdpyinfo failed"
+    fi
+    # Simple X connection test
+    if [ -S "/tmp/.X11-unix/X${DISPLAY#:}" ]; then
+        echo "[deploy] ✓ X11 socket exists for display $DISPLAY"
+    else
+        echo "[deploy] ✗ X11 socket NOT found for display $DISPLAY"
+    fi
+fi
+
+# Test 0: Debug with --in-process-gpu (runs GPU code in main process for clearer errors)
+echo "[deploy] Test 0: Chrome with --in-process-gpu (GPU debugging mode)..."
+timeout 30 google-chrome-unstable \
+    $CHROME_GPU_FLAGS \
+    --in-process-gpu \
+    --use-gl=angle \
+    --use-angle=vulkan \
+    $CHROME_WEBGPU_FLAGS \
+    --headless=new \
+    --enable-logging=stderr \
+    --v=1 \
+    --dump-dom \
+    --virtual-time-budget=5000 \
+    "file:///tmp/webgpu-test.html" 2>&1 | tee /tmp/chrome-in-process-gpu.txt | head -100 || true
+echo "[deploy] In-process GPU test output:"
+grep -iE "(WEBGPU_RESULT|gpu|vulkan|dawn|error|fail)" /tmp/chrome-in-process-gpu.txt 2>/dev/null | head -20 || echo "[deploy] No relevant output"
 echo "[deploy] ───────────────────────────────────────────────────────────"
 
 # Test 1: Headless=new with native Vulkan (requires NVIDIA Vulkan ICD)
@@ -611,14 +661,19 @@ import { chromium } from 'playwright';
 // Xvfb provides the X11 display, Chrome uses GPU via Vulkan
 const args = [
   '--no-sandbox',
+  '--disable-gpu-sandbox',  // CRITICAL for container GPU access
+  '--disable-setuid-sandbox',
   '--disable-dev-shm-usage',
   // CRITICAL: DO NOT use headless flags - WebGPU needs window context
   // Chrome connects to Xvfb on DISPLAY=:99
-  // Use ANGLE with Vulkan backend for WebGPU
+  // GPU initialization flags
+  '--use-gl=angle',
   '--use-angle=vulkan',
   // WebGPU essentials
   '--enable-unsafe-webgpu',
-  '--enable-features=WebGPU,Vulkan',
+  '--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan,WebGPU',
+  '--enable-dawn-backends=vulkan',  // Explicitly enable Dawn Vulkan backend
+  '--enable-dawn-features=allow_unsafe_apis',
   '--ignore-gpu-blocklist',
   // Enable GPU
   '--enable-gpu',
@@ -659,6 +714,8 @@ try {
       DISPLAY: process.env.DISPLAY || ':99',  // Xvfb display
       VK_ICD_FILENAMES: '/usr/share/vulkan/icd.d/nvidia_icd.json',
       LIBGL_ALWAYS_SOFTWARE: '0',
+      XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || '/tmp/runtime-root',
+      XAUTHORITY: process.env.XAUTHORITY || '/tmp/.Xauthority',
     },
   };
   if (executablePath) {
@@ -709,16 +766,34 @@ try {
   // Check chrome://gpu for diagnostics
   console.log('DEBUG: Checking chrome://gpu...');
   try {
-    await page.goto('chrome://gpu', { timeout: 10000 });
+    await page.goto('chrome://gpu', { timeout: 15000 });
+    await new Promise(r => setTimeout(r, 2000));  // Wait for GPU info to populate
     const gpuStatus = await page.evaluate(() => {
       const featureStatusList = document.getElementById('feature-status-list');
+      const basicInfo = document.getElementById('basic-info');
+      const problemsDiv = document.getElementById('problems-div');
+
+      let result = '';
       if (featureStatusList) {
-        // Get first 500 chars of GPU feature status
-        return featureStatusList.innerText.substring(0, 500);
+        result += 'FEATURES: ' + featureStatusList.innerText.substring(0, 800) + '\n';
       }
-      return 'GPU status not found';
+      if (basicInfo) {
+        result += 'BASIC: ' + basicInfo.innerText.substring(0, 400) + '\n';
+      }
+      if (problemsDiv && problemsDiv.innerText.trim()) {
+        result += 'PROBLEMS: ' + problemsDiv.innerText.substring(0, 300);
+      }
+
+      // Also get full body text for debugging
+      const bodyText = document.body.innerText || '';
+      if (!result && bodyText) {
+        result = 'BODY: ' + bodyText.substring(0, 1000);
+      }
+
+      return result || 'GPU status not found (page empty)';
     });
-    console.log('DEBUG: chrome://gpu status:', gpuStatus.substring(0, 200));
+    console.log('DEBUG: chrome://gpu diagnostics:');
+    console.log(gpuStatus.substring(0, 1000));
   } catch (e) {
     console.log('DEBUG: chrome://gpu failed:', e.message);
   }
@@ -774,6 +849,15 @@ PLAYWRIGHTEOF
         echo "[deploy] ✓ WebGPU works with Playwright non-headless + Xvfb"
     fi
 fi
+
+# Check for Chrome crash dumps
+echo "[deploy] Checking for Chrome crash logs..."
+for crashdir in /tmp/Crash* /root/.config/google-chrome-unstable/Crash* /tmp/.com.google.Chrome*; do
+    if [ -d "$crashdir" ]; then
+        echo "[deploy] Found crash directory: $crashdir"
+        ls -la "$crashdir" 2>/dev/null | head -10 || true
+    fi
+done
 
 echo "[deploy] ═══════════════════════════════════════════════════════════"
 if [ "$WEBGPU_WORKING" != "false" ]; then
