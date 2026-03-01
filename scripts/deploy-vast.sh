@@ -1277,9 +1277,49 @@ HEALTH=$(curl -s "http://localhost:5555/health" --max-time 3 2>/dev/null || echo
 echo "[deploy] Health: $HEALTH"
 
 echo ""
+echo "[deploy] ═══ WAITING FOR STREAMING TO START ═══"
+
+# Wait for the streaming bridge to initialize (it takes ~30-60s to start Chrome + connect to RTMP)
+echo "[deploy] Waiting 60s for streaming bridge to initialize..."
+sleep 60
+
+echo ""
+echo "[deploy] ═══ PM2 PROCESS STATUS ═══"
+bunx pm2 status
+
+echo ""
+echo "[deploy] ═══ PM2 LOGS (last 200 lines) ═══"
+bunx pm2 logs hyperscape-duel --nostream --lines 200 2>&1 || echo "[deploy] Failed to get PM2 logs"
+
+echo ""
+echo "[deploy] ═══ STREAMING HEALTH CHECK ═══"
+# Check if RTMP bridge is mentioned in logs (connected, streaming, etc)
+STREAM_STATUS=$(bunx pm2 logs hyperscape-duel --nostream --lines 100 2>&1 | grep -iE "(rtmp|stream|connected|ffmpeg|twitch)" | tail -20)
+if [ -n "$STREAM_STATUS" ]; then
+    echo "[deploy] Streaming-related log entries:"
+    echo "$STREAM_STATUS"
+else
+    echo "[deploy] No streaming-related log entries found"
+fi
+
+echo ""
+echo "[deploy] ═══ FINAL HEALTH CHECK ═══"
+FINAL_HEALTH=$(curl -s "http://localhost:5555/health" --max-time 5 2>/dev/null || echo '{"status":"unreachable"}')
+echo "[deploy] Final health: $FINAL_HEALTH"
+
+PM2_STATUS=$(bunx pm2 jlist 2>/dev/null | jq -r '.[] | "\(.name): \(.pm2_env.status) (restarts: \(.pm2_env.restart_time))"' || echo "unknown")
+echo "[deploy] PM2 status: $PM2_STATUS"
+
+# Check if process crashed
+RESTART_COUNT=$(bunx pm2 jlist 2>/dev/null | jq -r '.[0].pm2_env.restart_time // 0')
+if [ "$RESTART_COUNT" -gt "2" ]; then
+    echo "[deploy] WARNING: Process has restarted $RESTART_COUNT times - possible crash loop!"
+    echo "[deploy] ═══ ERROR LOGS ═══"
+    cat logs/duel-error.log 2>/dev/null | tail -100 || echo "No error log found"
+fi
+
+echo ""
 echo "[deploy] ═══ DEPLOYMENT COMPLETE ═══"
-echo "[deploy] Diagnostics will run asynchronously - check PM2 logs for streaming status"
 echo "[deploy] Use: bunx pm2 logs hyperscape-duel --lines 100"
 
-# Exit successfully - don't wait for streaming diagnostics
 exit 0
