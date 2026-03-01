@@ -449,8 +449,18 @@ async function testWebGpuInit(
           }
 
           // Get adapter info for diagnostics
-          const info = await adapter.requestAdapterInfo();
-          const adapterInfo = `${info.vendor || "unknown"} - ${info.architecture || "unknown"} (${info.description || "no description"})`;
+          // Use newer API if available, fall back to direct properties for older Chrome
+          let adapterInfo: string;
+          if (typeof adapter.requestAdapterInfo === "function") {
+            const info = await adapter.requestAdapterInfo();
+            adapterInfo = `${info.vendor || "unknown"} - ${info.architecture || "unknown"} (${info.description || "no description"})`;
+          } else {
+            // Older Chrome: use direct adapter properties
+            const features = adapter.features
+              ? Array.from(adapter.features).slice(0, 3).join(", ")
+              : "N/A";
+            adapterInfo = `adapter found (features: ${features})`;
+          }
 
           // Clean up
           device.destroy();
