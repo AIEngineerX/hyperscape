@@ -1375,10 +1375,24 @@ async function main() {
     const captureHeadlessForLaunch = (
       streamEnv.STREAM_CAPTURE_HEADLESS || "true"
     ).toLowerCase() === "true";
+
+    // Check if we already have a properly configured DISPLAY (e.g., from deploy-vast.sh)
+    // If DISPLAY is already set (e.g., :99), use it directly instead of spawning a new Xvfb
+    const existingDisplay = process.env.DISPLAY;
+    const hasExistingXvfb = existingDisplay && existingDisplay.startsWith(':');
+
     const useXvfbForCapture =
       process.platform === "linux" &&
       !captureHeadlessForLaunch &&
+      !hasExistingXvfb && // Don't spawn new Xvfb if we already have one
       (process.env.DUEL_CAPTURE_USE_XVFB || "true").toLowerCase() !== "false";
+
+    // If using existing display, inherit it in streamEnv
+    if (hasExistingXvfb) {
+      log(`using existing display ${existingDisplay} (not spawning new Xvfb)`);
+      streamEnv.DISPLAY = existingDisplay;
+    }
+
     const rtmpCommand = useXvfbForCapture ? "xvfb-run" : "bun";
     const rtmpArgs = useXvfbForCapture
       ? [
@@ -1394,6 +1408,8 @@ async function main() {
       : ["run", "--cwd", "packages/server", "stream:rtmp"];
     if (useXvfbForCapture) {
       log("starting RTMP bridge + capture under Xvfb (virtual display)...");
+    } else if (hasExistingXvfb) {
+      log(`starting RTMP bridge + capture with existing DISPLAY=${existingDisplay}...`);
     }
 
     spawnManaged(
