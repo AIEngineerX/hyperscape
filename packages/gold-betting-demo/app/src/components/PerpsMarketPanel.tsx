@@ -54,6 +54,7 @@ export function PerpsMarketPanel({
   const [selectedAgent, setSelectedAgent] = useState<number>(agent1Id);
 
   const [positions, setPositions] = useState<PositionRow[]>([]);
+  const [marketData, setMarketData] = useState<Record<number, any>>({});
 
   const fetchState = async () => {
     try {
@@ -83,18 +84,48 @@ export function PerpsMarketPanel({
 
       let s1 = null,
         s2 = null;
+      let oiLong1 = 0,
+        oiShort1 = 0,
+        funding1 = 0;
+      let oiLong2 = 0,
+        oiShort2 = 0,
+        funding2 = 0;
+
       try {
         const acc1 = await program.account.oracleState.fetch(oracle1Pda);
         s1 = acc1.spotIndex.toNumber() / 1_000_000;
+        oiLong1 = acc1.totalLongOi.toNumber() / 1_000_000;
+        oiShort1 = acc1.totalShortOi.toNumber() / 1_000_000;
+        funding1 = acc1.currentFundingRate.toNumber() / 1_000_000;
       } catch (e) {}
 
       try {
         const acc2 = await program.account.oracleState.fetch(oracle2Pda);
         s2 = acc2.spotIndex.toNumber() / 1_000_000;
+        oiLong2 = acc2.totalLongOi.toNumber() / 1_000_000;
+        oiShort2 = acc2.totalShortOi.toNumber() / 1_000_000;
+        funding2 = acc2.currentFundingRate.toNumber() / 1_000_000;
       } catch (e) {}
 
       setAgent1Spot(s1);
       setAgent2Spot(s2);
+
+      // We'll store OI/Funding in separate states or an object map if necessary,
+      // but let's just make a fast state object for it
+      setMarketData({
+        [agent1Id]: {
+          long: oiLong1,
+          short: oiShort1,
+          funding: funding1,
+          spot: s1,
+        },
+        [agent2Id]: {
+          long: oiLong2,
+          short: oiShort2,
+          funding: funding2,
+          spot: s2,
+        },
+      });
 
       // Fetch Positions
       if (wallet.publicKey) {
@@ -488,9 +519,60 @@ export function PerpsMarketPanel({
             {(agentCollateral * agentLeverage).toFixed(2)} GOLD
           </span>
         </div>
-        {agentSpot && agentLeverage > 1 && (
+
+        {marketData[selectedAgent] && (
           <>
             <div className="perp-summary-row">
+              <span style={{ fontSize: "11px", color: "#888" }}>
+                Skew (Long - Short)
+              </span>
+              <span style={{ fontSize: "11px", color: "#888" }}>
+                {marketData[selectedAgent].long.toFixed(0)}L /{" "}
+                {marketData[selectedAgent].short.toFixed(0)}S
+              </span>
+            </div>
+            {agentSpot && (
+              <div className="perp-summary-row" style={{ marginTop: "4px" }}>
+                <span style={{ fontSize: "11px", color: "#aaa" }}>
+                  Est. Execution Price (Long)
+                </span>
+                <span style={{ fontSize: "11px", color: "#22c55e" }}>
+                  $
+                  {(
+                    agentSpot *
+                    (1 +
+                      (marketData[selectedAgent].long -
+                        marketData[selectedAgent].short +
+                        (agentCollateral * agentLeverage) / 2) /
+                        1_000_000)
+                  ).toFixed(4)}
+                </span>
+              </div>
+            )}
+            {agentSpot && (
+              <div className="perp-summary-row">
+                <span style={{ fontSize: "11px", color: "#aaa" }}>
+                  Est. Execution Price (Short)
+                </span>
+                <span style={{ fontSize: "11px", color: "#ef4444" }}>
+                  $
+                  {(
+                    agentSpot *
+                    (1 +
+                      (marketData[selectedAgent].long -
+                        marketData[selectedAgent].short -
+                        (agentCollateral * agentLeverage) / 2) /
+                        1_000_000)
+                  ).toFixed(4)}
+                </span>
+              </div>
+            )}
+          </>
+        )}
+
+        {agentSpot && agentLeverage > 1 && (
+          <>
+            <div className="perp-summary-row" style={{ marginTop: "8px" }}>
               <span>Est. Liq (Long)</span>
               <span style={{ color: "#ef4444" }}>
                 $

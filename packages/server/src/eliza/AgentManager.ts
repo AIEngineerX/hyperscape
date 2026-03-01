@@ -332,6 +332,7 @@ export class AgentManager {
       startedAt: Date.now(),
       lastActivity: Date.now(),
       behaviorInterval: null,
+      behaviorStartTimeout: null,
       goal: null,
       questsAccepted: new Set(),
       currentTargetId: null,
@@ -796,7 +797,14 @@ export function getAgentManager(): AgentManager | null {
  */
 export function setAgentManager(manager: AgentManager): void {
   if (globalAgentManager && globalAgentManager !== manager) {
-    globalAgentManager.dispose();
+    const staleManager = globalAgentManager;
+    void staleManager.shutdown().catch((err) => {
+      console.warn(
+        "[AgentManager] Failed to shutdown previous manager during replacement:",
+        errMsg(err),
+      );
+      staleManager.dispose();
+    });
   }
   globalAgentManager = manager;
 }

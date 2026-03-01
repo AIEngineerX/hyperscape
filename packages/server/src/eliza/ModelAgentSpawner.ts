@@ -490,19 +490,27 @@ export async function spawnModelAgents(
         // Prevent ensureEmbeddingDimension from taking > 30s due to API timeouts/rate limits
         runtimeInstance.ensureEmbeddingDimension = async () => {
           try {
+            let timeoutId: ReturnType<typeof setTimeout> | null = null;
             // Give the API 5 seconds to reply
-            await Promise.race([
-              AgentRuntime.prototype.ensureEmbeddingDimension.call(
-                runtimeInstance,
-              ),
-              new Promise((_, reject) =>
-                setTimeout(
-                  () =>
-                    reject(new Error("Embedding dimension check timed out")),
-                  5000,
+            try {
+              await Promise.race([
+                AgentRuntime.prototype.ensureEmbeddingDimension.call(
+                  runtimeInstance,
                 ),
-              ),
-            ]);
+                new Promise((_, reject) => {
+                  timeoutId = setTimeout(
+                    () =>
+                      reject(new Error("Embedding dimension check timed out")),
+                    5000,
+                  );
+                }),
+              ]);
+            } finally {
+              if (timeoutId) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
+              }
+            }
           } catch (err) {
             console.warn(
               `[ModelAgentSpawner] ensureEmbeddingDimension failed or timed out: ${errMsg(err)}. Using fallback 1536.`,

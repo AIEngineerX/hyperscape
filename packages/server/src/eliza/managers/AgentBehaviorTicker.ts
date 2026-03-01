@@ -71,6 +71,7 @@ export interface AgentInstance {
   lastActivity: number;
   error?: string;
   behaviorInterval: ReturnType<typeof setInterval> | null;
+  behaviorStartTimeout: ReturnType<typeof setTimeout> | null;
   goal: AgentGoal | null;
   questsAccepted: Set<string>;
   currentTargetId: string | null;
@@ -190,7 +191,10 @@ export class AgentBehaviorTicker {
 
     // Delay the first tick so PLAYER_REGISTERED has time to fire and
     // QuestSystem can load the player's quest state from the database.
-    setTimeout(() => void runTick(), 3000);
+    instance.behaviorStartTimeout = setTimeout(() => {
+      instance.behaviorStartTimeout = null;
+      void runTick();
+    }, 3000);
   }
 
   /**
@@ -205,6 +209,10 @@ export class AgentBehaviorTicker {
     if (instance.behaviorInterval) {
       clearInterval(instance.behaviorInterval);
       instance.behaviorInterval = null;
+    }
+    if (instance.behaviorStartTimeout) {
+      clearTimeout(instance.behaviorStartTimeout);
+      instance.behaviorStartTimeout = null;
     }
 
     // Best-effort stop so paused/stopped agents don't keep pathing or attacking.

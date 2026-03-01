@@ -20,9 +20,24 @@ import {
 } from "@solana/spl-token";
 
 import fightOracleIdl from "../../../anchor/target/idl/fight_oracle.json";
+import goldClobIdl from "../../../anchor/target/idl/gold_clob_market.json";
 
 type SignableTx = Transaction | VersionedTransaction;
 type AnchorLikeWallet = Wallet & { payer: Keypair };
+type IdlWithAddress = Idl & {
+  address?: string;
+  metadata?: {
+    address?: string;
+  };
+};
+
+function resolveIdlAddress(idl: IdlWithAddress, label: string): string {
+  const address = idl.address || idl.metadata?.address || "";
+  if (!address) {
+    throw new Error(`Missing program address in ${label} IDL`);
+  }
+  return address;
+}
 
 function seedKeypair(offset: number): Keypair {
   const seed = new Uint8Array(32);
@@ -115,6 +130,10 @@ async function main(): Promise<void> {
     process.env.E2E_SOLANA_RPC_URL || "http://127.0.0.1:8899";
   const solanaWsUrl = process.env.E2E_SOLANA_WS_URL || "ws://127.0.0.1:8900";
   const localTokenProgram = TOKEN_PROGRAM_ID;
+  const clobProgramId = resolveIdlAddress(
+    goldClobIdl as unknown as IdlWithAddress,
+    "gold_clob_market",
+  );
 
   const connection = new Connection(solanaRpcUrl, "confirmed");
   let authority = seedKeypair(17);
@@ -265,6 +284,8 @@ async function main(): Promise<void> {
     "VITE_SOLANA_CLUSTER=localnet",
     `VITE_SOLANA_RPC_URL=${solanaRpcUrl}`,
     `VITE_SOLANA_WS_URL=${solanaWsUrl}`,
+    `VITE_FIGHT_ORACLE_PROGRAM_ID=${fightProgram.programId.toBase58()}`,
+    `VITE_GOLD_BINARY_MARKET_PROGRAM_ID=${clobProgramId}`,
     `VITE_GOLD_MINT=${goldMint.toBase58()}`,
     `VITE_ACTIVE_MATCH_ID=${currentMatchId}`,
     "VITE_BET_WINDOW_SECONDS=300",

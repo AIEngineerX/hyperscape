@@ -228,8 +228,9 @@ export class ElizaDuelBot extends EventEmitter {
 
         // Initialize with timeout to prevent hanging
         const initPromise = this.runtime.initialize();
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
         const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(
+          timeoutId = setTimeout(
             () =>
               reject(
                 new Error(
@@ -240,7 +241,14 @@ export class ElizaDuelBot extends EventEmitter {
           );
         });
 
-        await Promise.race([initPromise, timeoutPromise]);
+        try {
+          await Promise.race([initPromise, timeoutPromise]);
+        } finally {
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+        }
 
         this._id = characterId;
         this._connected = true;

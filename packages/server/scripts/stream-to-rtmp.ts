@@ -299,7 +299,10 @@ async function waitForStreamReadiness(
         const normalizedText = text.toLowerCase();
         const hasStreamingBootUi =
           normalizedText.includes("waiting for duel data") ||
-          normalizedText.includes("initializing world systems");
+          normalizedText.includes("initializing world systems") ||
+          normalizedText.includes("initializing") ||
+          normalizedText.includes("loading assets") ||
+          normalizedText.includes("finalizing");
         return {
           hasCanvas: document.querySelector("canvas") !== null,
           readyFlag: win.__HYPERSCAPE_STREAM_READY__ === true,
@@ -989,6 +992,11 @@ async function main() {
             "[Main] Falling back to MediaRecorder capture mode after CDP stall.",
           );
           try {
+            // Clear any existing watchdog before starting a new one.
+            if (captureWatchdog) {
+              clearInterval(captureWatchdog);
+              captureWatchdog = null;
+            }
             await withTimeout(
               stopCdpCapture(),
               5_000,
@@ -1035,23 +1043,34 @@ async function main() {
 
     // Check for periodic restart to clear memory leaks
     if (Date.now() - launchTime > BROWSER_RESTART_INTERVAL_MS) {
-      console.log(
-        "[Main] 🔄 Scheduled browser rotation to prevent WebGL memory leaks.",
-      );
-      try {
-        if (activeCaptureMode === "cdp") {
-          await stopCdpCapture();
-        } else {
-          await stopInPageCaptureControl();
+      // Guard: skip rotation if a CDP recovery is already in flight.
+      if (cdpRecoveryInFlight) {
+        console.warn(
+          "[Main] Skipping scheduled browser rotation — CDP recovery in progress.",
+        );
+      } else {
+        console.log(
+          "[Main] 🔄 Scheduled browser rotation to prevent WebGL memory leaks.",
+        );
+        try {
+          if (activeCaptureMode === "cdp") {
+            await stopCdpCapture();
+          } else {
+            if (captureWatchdog) {
+              clearInterval(captureWatchdog);
+              captureWatchdog = null;
+            }
+            await stopInPageCaptureControl();
+          }
+          await setupBrowser();
+          if (activeCaptureMode === "cdp") {
+            await startCdpCapture(bridge);
+          } else if (activeCaptureMode === "mediarecorder") {
+            captureWatchdog = (await startLegacyCapture(bridge)) ?? null;
+          }
+        } catch (err) {
+          console.error("[Main] Failed to rotate browser!", err);
         }
-        await setupBrowser();
-        if (activeCaptureMode === "cdp") {
-          await startCdpCapture(bridge);
-        } else if (activeCaptureMode === "webcodecs") {
-          // Watchdog will automatically inject script on new page
-        }
-      } catch (err) {
-        console.error("[Main] Failed to rotate browser!", err);
       }
     }
   }, 30000);

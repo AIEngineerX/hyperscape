@@ -532,7 +532,8 @@ export class MobEntity extends CombatantEntity {
 
     // Register for update loop (both client and server)
     // Client: VRM animations via clientUpdate()
-    // Server: AI behavior via serverUpdate()
+    // Server: per-frame housekeeping via serverUpdate()
+    // NPC AI itself is tick-driven by GameTickProcessor via runAITick()
     this.world.setHot(this, true);
 
     // Register with HealthBars system (client-side only)
@@ -1711,6 +1712,21 @@ export class MobEntity extends CombatantEntity {
   }
 
   /**
+   * Tick-driven AI update entry point (called by GameTickProcessor).
+   * Guarded to avoid duplicate AI updates within the same server tick.
+   */
+  public runAITick(deltaTime: number): void {
+    const currentTick = this.world.currentTick;
+    if (currentTick === this._lastAITick) {
+      return;
+    }
+
+    this._lastAITick = currentTick;
+    this.aiStateMachine.update(this.createAIContext(), deltaTime);
+    this.config.aiState = this.aiStateMachine.getCurrentState();
+  }
+
+  /**
    * SERVER-SIDE UPDATE
    * Handles AI logic, pathfinding, combat, and state management
    * Changes are synced to clients via getNetworkData() and markNetworkDirty()
@@ -1765,20 +1781,8 @@ export class MobEntity extends CombatantEntity {
       }
     }
 
-    // AI runs once per server tick (600ms), not every frame
-    const currentTick = this.world.currentTick;
-    if (currentTick === this._lastAITick) {
-      // Same tick as last AI update - skip AI processing
-      // This saves ~59 out of 60 AI updates per second
-      return;
-    }
-    this._lastAITick = currentTick;
-
-    // Update AI state machine (now runs once per tick instead of every frame)
-    this.aiStateMachine.update(this.createAIContext(), deltaTime);
-
-    // Sync config.aiState with AI state machine current state
-    this.config.aiState = this.aiStateMachine.getCurrentState();
+    // AI updates are handled by GameTickProcessor.runAITick()
+    // to preserve deterministic OSRS tick ordering.
   }
 
   /**

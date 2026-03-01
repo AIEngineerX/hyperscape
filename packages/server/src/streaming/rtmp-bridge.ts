@@ -1336,6 +1336,7 @@ export class RTMPBridge {
     if (!this.ffmpeg) return;
 
     console.log("[RTMPBridge] Stopping FFmpeg");
+    this.stopHealthMonitoring();
     this.ffmpegBackpressured = false;
     this.setClientBackpressurePaused(false);
 
