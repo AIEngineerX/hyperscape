@@ -1,17 +1,26 @@
 #!/bin/bash
 # Vast.ai GPU Instance Provisioner
 # Automatically finds and rents a GPU instance with display driver support
-# Required for WebGPU streaming (not just compute)
+# CRITICAL: gpu_display_active=true is REQUIRED for WebGPU streaming
+#
+# Usage:
+#   ./vast-provision.sh              # Interactive mode
+#   ./vast-provision.sh --auto       # Non-interactive, auto-select best offer
+#   ./vast-provision.sh --search     # Just search, don't provision
+#
+# Environment:
+#   VAST_API_KEY  - Required. Your Vast.ai API key
 
 set -e
 
 # ── Configuration ────────────────────────────────────────────────────────────
 # Minimum requirements for WebGPU streaming
+# CRITICAL: gpu_display_active=true is non-negotiable for WebGPU
 MIN_GPU_RAM=20          # GB - RTX 4090 has 24GB
 MIN_RELIABILITY=0.95    # 95% uptime
 MAX_PRICE_PER_HOUR=2.0  # USD per hour
 PREFERRED_GPUS="RTX_4090,RTX_3090,RTX_A6000,A100"
-DISK_SPACE=100          # GB minimum
+DISK_SPACE=120          # GB minimum (increased for builds)
 
 # ── Colors for output ────────────────────────────────────────────────────────
 RED='\033[0;31m'

@@ -13,12 +13,90 @@ on:
         description: 'Skip build step (deploy current code)'
         required: false
         default: 'false'
+      force_deploy:
+        description: 'Force deploy even if GPU display check fails'
+        required: false
+        default: 'false'
 
 jobs:
-  deploy:
+  # Pre-flight check: Verify instance has GPU display support for WebGPU
+  preflight:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    outputs:
+      instance_ready: ${{ steps.check.outputs.ready }}
+      gpu_display: ${{ steps.check.outputs.gpu_display }}
     steps:
+      - name: Check Instance GPU Display Support
+        id: check
+        env:
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
+          VAST_SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+        run: |
+          # Skip if secrets not configured
+          if [ -z "$VAST_HOST" ] || [ -z "$VAST_PORT" ]; then
+            echo "::warning::Vast.ai secrets not configured (VAST_HOST, VAST_PORT)"
+            echo "ready=false" >> $GITHUB_OUTPUT
+            echo "gpu_display=unknown" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Checking GPU display support on $VAST_HOST:$VAST_PORT..."
+
+          # Setup SSH key
+          mkdir -p ~/.ssh
+          echo "$VAST_SSH_KEY" > ~/.ssh/vast_key
+          chmod 600 ~/.ssh/vast_key
+
+          # Check GPU display mode via nvidia-smi
+          GPU_CHECK=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
+            -i ~/.ssh/vast_key -p "$VAST_PORT" "root@$VAST_HOST" \
+            "nvidia-smi --query-gpu=display_mode,driver_version --format=csv,noheader 2>/dev/null || echo 'FAILED'" \
+            2>&1 || echo "SSH_FAILED")
+
+          echo "GPU check result: $GPU_CHECK"
+
+          if echo "$GPU_CHECK" | grep -q "SSH_FAILED\|Connection refused\|timed out"; then
+            echo "::error::Cannot connect to Vast.ai instance"
+            echo "ready=false" >> $GITHUB_OUTPUT
+            echo "gpu_display=unreachable" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if echo "$GPU_CHECK" | grep -q "Enabled"; then
+            echo "::notice::GPU display mode is ENABLED - WebGPU will work!"
+            echo "ready=true" >> $GITHUB_OUTPUT
+            echo "gpu_display=enabled" >> $GITHUB_OUTPUT
+          elif echo "$GPU_CHECK" | grep -q "Disabled"; then
+            echo "::warning::GPU display mode is DISABLED - WebGPU may NOT work"
+            echo "::warning::Consider provisioning an instance with gpu_display_active=true"
+            echo "ready=true" >> $GITHUB_OUTPUT
+            echo "gpu_display=disabled" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::Could not determine GPU display mode"
+            echo "ready=true" >> $GITHUB_OUTPUT
+            echo "gpu_display=unknown" >> $GITHUB_OUTPUT
+          fi
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: preflight
+    if: |
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success') &&
+      (needs.preflight.outputs.instance_ready == 'true' || github.event.inputs.force_deploy == 'true')
+    steps:
+      - name: Check GPU Display Status
+        run: |
+          GPU_STATUS="${{ needs.preflight.outputs.gpu_display }}"
+          if [ "$GPU_STATUS" = "disabled" ]; then
+            echo "::warning::GPU display is DISABLED on this instance"
+            echo "::warning::WebGPU streaming may fail. Consider:"
+            echo "  1. Running: cd packages/vast-keeper && VAST_API_KEY=xxx bun run provision"
+            echo "  2. Updating VAST_HOST and VAST_PORT secrets"
+            echo "  3. Re-running this workflow"
+          fi
+
       # Step 1: Enter maintenance mode before deployment
       # This pauses new duel cycles and waits for current markets to resolve
       - name: Enter Maintenance Mode

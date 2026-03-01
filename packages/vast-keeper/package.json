@@ -1,13 +1,22 @@
 {
 	"name": "@hyperscape/vast-keeper",
 	"version": "1.0.0",
-	"description": "Watchdog service for managing the Vast.ai Hyperscape deployment",
+	"description": "Watchdog service for managing the Vast.ai Hyperscape deployment with WebGPU support",
 	"private": true,
 	"type": "module",
 	"main": "src/index.ts",
+	"bin": {
+		"vast-keeper": "./src/cli.ts",
+		"vast-provision": "./src/cli.ts"
+	},
 	"scripts": {
 		"dev": "bun run src/index.ts",
 		"start": "bun run src/index.ts",
+		"keeper": "bun run src/index.ts",
+		"provision": "bun run src/cli.ts provision",
+		"status": "bun run src/cli.ts status",
+		"destroy": "bun run src/cli.ts destroy",
+		"search": "bun run src/cli.ts search",
 		"lint": "eslint src/"
 	},
 	"dependencies": {
