@@ -822,12 +822,25 @@ try {
         if (!adapter) {
           return { available: false, error: 'requestAdapter returned null', phase: 'adapter' };
         }
-        const info = await adapter.requestAdapterInfo();
+        // Successfully got adapter - WebGPU works!
+        // Try newer API first, fall back to direct properties
+        let info = {};
+        if (typeof adapter.requestAdapterInfo === 'function') {
+          info = await adapter.requestAdapterInfo();
+        } else {
+          // Older Chrome: use direct properties
+          info = {
+            vendor: adapter.name || 'unknown',
+            architecture: 'unknown',
+            description: adapter.features ? Array.from(adapter.features).join(', ').substring(0, 100) : 'N/A'
+          };
+        }
         return {
           available: true,
           vendor: info.vendor || 'unknown',
           architecture: info.architecture || 'unknown',
           description: info.description || 'unknown',
+          adapterExists: true,
           phase: 'success'
         };
       } catch (e) {
