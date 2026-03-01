@@ -85,6 +85,10 @@ function createMobTileState(
     hasDestination: false,
     isChasing: false,
     combatRange,
+    // Required by TileMovementState base interface
+    requestedDestination: null,
+    lastPathPartial: false,
+    nextSegmentPrecomputed: false,
   };
 }
 

@@ -573,7 +573,7 @@ export class PlayerScriptQueue {
    */
   destroy(): void {
     this.playerStates.clear();
-    this.handler = null;
+    this.handlers.clear();
   }
 }
 
