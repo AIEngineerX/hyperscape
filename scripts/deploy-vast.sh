@@ -665,34 +665,30 @@ import { chromium } from 'playwright';
 const useSwiftShader = process.env.WEBGPU_USE_SWIFTSHADER === 'true';
 console.log('DEBUG: Using SwiftShader:', useSwiftShader);
 
+// Consolidated feature flags - Chrome only processes one --enable-features properly
+const featureFlags = useSwiftShader
+  ? 'WebGPU'  // SwiftShader provides its own Vulkan
+  : 'Vulkan,VulkanFromANGLE,DefaultANGLEVulkan,WebGPU';
+
 const args = [
   '--no-sandbox',
-  '--disable-gpu-sandbox',  // CRITICAL for container GPU access
+  '--disable-gpu-sandbox',
   '--disable-setuid-sandbox',
   '--disable-dev-shm-usage',
-  // CRITICAL: DO NOT use headless flags - WebGPU needs window context
-  // Chrome connects to Xvfb on DISPLAY=:99
-  // GPU initialization flags
+  // GPU initialization
   '--use-gl=angle',
   useSwiftShader ? '--use-angle=swiftshader' : '--use-angle=vulkan',
-  // WebGPU essentials - use separate enable-features to avoid parsing issues
+  // WebGPU - SINGLE enable-features flag with comma-separated values
   '--enable-unsafe-webgpu',
-  '--enable-features=Vulkan',
-  '--enable-features=WebGPU',
-  '--enable-features=VulkanFromANGLE',
-  '--enable-features=DefaultANGLEVulkan',
-  // Dawn backend configuration
-  '--enable-dawn-backends=vulkan',
+  `--enable-features=${featureFlags}`,
+  // Dawn backend - try swiftshader backend for SwiftShader mode
+  useSwiftShader ? '--enable-dawn-backends=swiftshader' : '--enable-dawn-backends=vulkan',
   '--enable-dawn-features=allow_unsafe_apis,disable_blob_cache',
-  // Prevent GPU crashes from disabling features
+  // GPU settings
   '--disable-gpu-process-crash-limit',
   '--ignore-gpu-blocklist',
-  // Enable GPU
   '--enable-gpu',
   '--enable-webgpu-developer-features',
-  // Don't disable software rendering if hardware fails
-  // '--disable-software-rasterizer',
-  // Disable GPU sandbox for container
   '--disable-gpu-sandbox',
 ];
 
@@ -777,17 +773,36 @@ try {
     console.log('DEBUG: Basic render failed:', e.message);
   }
 
-  // FIRST: Check navigator.gpu on about:blank (before chrome://gpu which might crash)
-  console.log('DEBUG: Checking navigator.gpu on about:blank...');
+  // FIRST: Check navigator.gpu (before chrome://gpu which might crash)
+  // WebGPU requires a secure context - check this first
+  console.log('DEBUG: Checking secure context and navigator.gpu...');
   let gpuResult;
   try {
     gpuResult = await page.evaluate(async () => {
+      // Check secure context first
+      const secureContext = window.isSecureContext;
+      console.log('Secure context:', secureContext);
+
       // First check if navigator.gpu exists
       if (typeof navigator === 'undefined') {
-        return { available: false, error: 'navigator is undefined', phase: 'navigator' };
+        return { available: false, error: 'navigator is undefined', phase: 'navigator', secureContext };
       }
+
+      // List what's in navigator for debugging
+      const navProps = Object.keys(navigator).filter(k => k.includes('gpu') || k.includes('GPU'));
+      console.log('Navigator GPU-related props:', navProps);
+
       if (!navigator.gpu) {
-        return { available: false, error: 'navigator.gpu is undefined', phase: 'gpu_property' };
+        // Check if GPU is blocked for some reason
+        const hasGpu = 'gpu' in navigator;
+        return {
+          available: false,
+          error: hasGpu ? 'navigator.gpu exists but is falsy' : 'navigator.gpu is undefined',
+          phase: 'gpu_property',
+          secureContext,
+          hasGpuProperty: hasGpu,
+          navigatorProps: navProps
+        };
       }
       // navigator.gpu exists - try to get adapter
       try {
@@ -818,7 +833,9 @@ try {
   if (gpuResult.available) {
     console.log('WEBGPU_RESULT: SUCCESS - ' + gpuResult.vendor + ' / ' + gpuResult.description);
   } else {
-    console.log('WEBGPU_RESULT: FAILED - ' + gpuResult.error + ' (phase: ' + gpuResult.phase + ')');
+    const secureStatus = gpuResult.secureContext !== undefined ? `, secureContext: ${gpuResult.secureContext}` : '';
+    const hasGpuProp = gpuResult.hasGpuProperty !== undefined ? `, hasGpuProp: ${gpuResult.hasGpuProperty}` : '';
+    console.log('WEBGPU_RESULT: FAILED - ' + gpuResult.error + ' (phase: ' + gpuResult.phase + secureStatus + hasGpuProp + ')');
   }
 
   // OPTIONAL: Try chrome://gpu for diagnostics (may crash browser)
