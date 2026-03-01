@@ -167,20 +167,16 @@ async function main() {
 
   let exitCode = 0;
   try {
-    const build = await runCommand("anchor", ["build"], workspaceDir);
-    assertSuccess("anchor build", build);
-
     const localnetPrograms = parseLocalnetPrograms(
       anchorTomlPath,
       targetDeployDir,
     );
-    const missingSos = localnetPrograms
-      .filter((program) => !existsSync(program.soPath))
-      .map((program) => program.soPath);
+    const missingSos = localnetPrograms.filter(
+      (program) => !existsSync(program.soPath),
+    );
     if (missingSos.length > 0) {
-      throw new Error(
-        `Missing deploy artifacts: ${missingSos.join(", ")}. Run anchor build.`,
-      );
+      const build = await runCommand("anchor", ["build"], workspaceDir);
+      assertSuccess("anchor build", build);
     }
 
     const validatorArgs = [

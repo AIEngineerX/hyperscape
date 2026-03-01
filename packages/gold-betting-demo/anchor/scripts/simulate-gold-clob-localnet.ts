@@ -43,8 +43,18 @@ const STRATEGIES: Strategy[] = [
   "highest_spread",
 ];
 
-const WALLET_COUNT = 100;
-const ROUNDS = 1;
+function parsePositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer (got: ${raw})`);
+  }
+  return parsed;
+}
+
+const WALLET_COUNT = parsePositiveIntEnv("SOLANA_NATIVE_SIM_WALLETS", 100);
+const ROUNDS = parsePositiveIntEnv("SOLANA_NATIVE_SIM_ROUNDS", 1);
 const BASE_ORDER_AMOUNT = 3_000_000n;
 const BETTOR_FUNDING = Math.floor(2 * LAMPORTS_PER_SOL);
 const TREASURY_FUNDING = Math.floor(0.1 * LAMPORTS_PER_SOL);
@@ -131,6 +141,17 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+function deriveUserBalancePda(
+  programId: PublicKey,
+  matchState: PublicKey,
+  user: PublicKey,
+): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("balance"), matchState.toBuffer(), user.toBuffer()],
+    programId,
+  )[0];
+}
+
 function deriveOrderPda(
   programId: PublicKey,
   matchState: PublicKey,
@@ -154,13 +175,20 @@ async function main() {
   const idlPath = join(workspaceDir, "target", "idl", "gold_clob_market.json");
 
   const rpcUrl = process.env.ANCHOR_PROVIDER_URL ?? "http://127.0.0.1:8899";
+  const wsUrl = process.env.ANCHOR_WS_URL;
   const walletPath =
     process.env.ANCHOR_WALLET ?? `${process.env.HOME}/.config/solana/id.json`;
 
   const authority = Keypair.fromSecretKey(
     Uint8Array.from(JSON.parse(readFileSync(walletPath, "utf8")) as number[]),
   );
-  const connection = new anchor.web3.Connection(rpcUrl, "confirmed");
+  const connection =
+    wsUrl !== undefined
+      ? new anchor.web3.Connection(rpcUrl, {
+          commitment: "confirmed",
+          wsEndpoint: wsUrl,
+        })
+      : new anchor.web3.Connection(rpcUrl, "confirmed");
   const wallet = new anchor.Wallet(authority);
   const provider = new anchor.AnchorProvider(connection, wallet, {
     commitment: "confirmed",
@@ -224,6 +252,23 @@ async function main() {
     signatures.push(sig);
   }
 
+  async function fundWallets(recipients: PublicKey[], lamports: number) {
+    for (const group of chunk(recipients, 20)) {
+      const tx = new Transaction();
+      for (const recipient of group) {
+        tx.add(
+          SystemProgram.transfer({
+            fromPubkey: authority.publicKey,
+            toPubkey: recipient,
+            lamports,
+          }),
+        );
+      }
+      const sig = await provider.sendAndConfirm(tx, []);
+      signatures.push(sig);
+    }
+  }
+
   async function getBalance(pubkey: PublicKey) {
     return BigInt(await connection.getBalance(pubkey, "confirmed"));
   }
@@ -283,16 +328,15 @@ async function main() {
   const treasuryStartBalance = await getBalance(treasuryWallet.publicKey);
   const mmStartBalance = await getBalance(marketMakerWallet.publicKey);
 
-  const bettors: Bettor[] = [];
-  for (let i = 0; i < WALLET_COUNT; i += 1) {
-    const walletKeypair = Keypair.generate();
-    await sendSol(walletKeypair.publicKey, BETTOR_FUNDING);
-    bettors.push({
-      wallet: walletKeypair,
-      strategy: STRATEGIES[i % STRATEGIES.length],
-      initialBalance: await getBalance(walletKeypair.publicKey),
-    });
-  }
+  const bettors: Bettor[] = Array.from({ length: WALLET_COUNT }, (_, i) => ({
+    wallet: Keypair.generate(),
+    strategy: STRATEGIES[i % STRATEGIES.length],
+    initialBalance: BigInt(BETTOR_FUNDING),
+  }));
+  await fundWallets(
+    bettors.map((bettor) => bettor.wallet.publicKey),
+    BETTOR_FUNDING,
+  );
 
   for (let round = 1; round <= ROUNDS; round += 1) {
     const matchState = Keypair.generate();
@@ -342,6 +386,17 @@ async function main() {
       executionStats.betAttempts += 1;
 
       const bettorOrderId = await nextOrderId(matchState.publicKey);
+      const userBalance = deriveUserBalancePda(
+        programId,
+        matchState.publicKey,
+        bettor.wallet.publicKey,
+      );
+      const newOrder = deriveOrderPda(
+        programId,
+        matchState.publicKey,
+        bettor.wallet.publicKey,
+        bettorOrderId,
+      );
       await recordWithRetries("bettor-order", () =>
         program.methods
           .placeOrder(
@@ -353,6 +408,8 @@ async function main() {
           .accountsPartial({
             matchState: matchState.publicKey,
             orderBook: orderBook.publicKey,
+            userBalance,
+            newOrder,
             config: configPda,
             treasury: treasuryWallet.publicKey,
             marketMaker: marketMakerWallet.publicKey,
