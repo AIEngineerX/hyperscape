@@ -9,6 +9,7 @@ import {
 import { World } from "@hyperscape/shared";
 import { CoreUI } from "../game/CoreUI";
 import { ErrorBoundary } from "../components/common/ErrorBoundary";
+import { ThreeResourceManager } from "@/lib/ThreeResourceManager";
 
 export { System };
 
@@ -340,6 +341,25 @@ export function GameClient({
 
   useEffect(() => {
     let cleanedUp = false;
+    // Guards against the race where the cleanup callback fires while world.init()
+    // is still awaiting. If cleanup arrives first, init will destroy on landing.
+    // If init finishes first, cleanup destroys immediately as normal.
+    let initComplete = false;
+    let needsCleanup = false;
+
+    const doCleanup = () => {
+      try {
+        world.destroy();
+      } catch (error) {
+        console.warn(
+          "[GameClient] world.destroy() threw during cleanup:",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      // Stop the dev memory monitor and reset the disposed-object tracker
+      // so the next world init (e.g. hot-reload) starts completely clean
+      ThreeResourceManager.teardown();
+    };
 
     const init = async () => {
       const viewport = viewportRef.current;
@@ -402,6 +422,17 @@ export function GameClient({
         console.error("[GameClient] World initialization failed:", message);
         setInitError(message);
       }
+
+      // If cleanup fired while we were initializing, execute it now.
+      // Set initComplete even when init threw — partial worlds still hold
+      // resources (WebSocket, systems, render targets) that doCleanup() must
+      // release when the error screen eventually unmounts. doCleanup() is
+      // always wrapped in try/catch so it is safe to call on a failed init.
+      if (needsCleanup) {
+        doCleanup();
+      } else {
+        initComplete = true;
+      }
     };
 
     init();
@@ -410,14 +441,12 @@ export function GameClient({
     return () => {
       if (!cleanedUp) {
         cleanedUp = true;
-        // Destroy the world to cleanup WebSocket and resources
-        try {
-          world.destroy();
-        } catch (error) {
-          console.warn(
-            "[GameClient] world.destroy() threw during cleanup:",
-            error instanceof Error ? error.message : String(error),
-          );
+        if (initComplete) {
+          // Normal path — init finished before unmount
+          doCleanup();
+        } else {
+          // Init is still running — signal it to clean up when it lands
+          needsCleanup = true;
         }
       }
     };
