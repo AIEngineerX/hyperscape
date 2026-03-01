@@ -26,9 +26,9 @@ module.exports = {
             autorestart: true,
             max_restarts: 999999,
             min_uptime: "10s",        // consider healthy after 10s
-            restart_delay: 5000,      // 5s cooldown between restarts
-            // Crash-loop protection: after 15 rapid restarts, wait 60s
-            exp_backoff_restart_delay: 1000,
+            restart_delay: 10000,     // 10s cooldown between restarts (allow connections to close)
+            // Crash-loop protection: exponential backoff starting at 2s
+            exp_backoff_restart_delay: 2000,
             // Resource limits – restart if memory exceeds 4GB
             max_memory_restart: "4G",
             // Logging
@@ -39,6 +39,10 @@ module.exports = {
             // Environment
             env: {
                 NODE_ENV: "production",
+                // Reduce pool size to prevent connection exhaustion during crash loops
+                // Neon serverless has strict limits; lower pool = faster recovery
+                POSTGRES_POOL_MAX: "3",
+                POSTGRES_POOL_MIN: "0",
                 STREAMING_DUEL_ENABLED: "true",
                 DUEL_MARKET_MAKER_ENABLED: "true",
                 DUEL_BETTING_ENABLED: "false",
