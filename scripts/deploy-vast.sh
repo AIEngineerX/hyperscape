@@ -280,7 +280,8 @@ XORGEOF
     XORG_PID=$!
     sleep 5
 
-    if kill -0 $XORG_PID 2>/dev/null && xdpyinfo -display :99 >/dev/null 2>&1; then
+    # Check if Xorg started: verify process is running AND X socket exists
+    if kill -0 $XORG_PID 2>/dev/null && [ -S /tmp/.X11-unix/X99 ]; then
         # Check if Xorg is actually using NVIDIA (not software rendering)
         # If the NVIDIA driver failed, Xorg falls back to modesetting with swrast (software)
         if grep -q "IGLX: Loaded and initialized swrast" /var/log/Xorg.99.log 2>/dev/null; then
@@ -331,13 +332,23 @@ if [ "$RENDERING_MODE" = "unknown" ]; then
     XVFB_PID=$!
     sleep 3
 
-    if kill -0 $XVFB_PID 2>/dev/null && xdpyinfo -display :99 >/dev/null 2>&1; then
+    # Check if Xvfb started: verify process is running AND X socket exists
+    # Don't rely on xdpyinfo as it may not be installed
+    if kill -0 $XVFB_PID 2>/dev/null && [ -S /tmp/.X11-unix/X99 ]; then
         export DISPLAY=:99
         export DUEL_CAPTURE_USE_XVFB="true"
         RENDERING_MODE="xvfb-vulkan"
-        echo "[deploy] ✓ Xvfb started on :99 (Chrome will use NVIDIA Vulkan for WebGPU)"
+        echo "[deploy] ✓ Xvfb started on :99 (PID=$XVFB_PID)"
+        echo "[deploy] ✓ X socket exists at /tmp/.X11-unix/X99"
+        echo "[deploy] Chrome will use NVIDIA Vulkan for WebGPU rendering"
+        # Optional: try xdpyinfo if available
+        if command -v xdpyinfo &>/dev/null; then
+            xdpyinfo -display :99 2>&1 | head -5 || true
+        fi
     else
         echo "[deploy] Xvfb failed to start"
+        echo "[deploy] PID check: $(kill -0 $XVFB_PID 2>&1 || echo 'process not running')"
+        echo "[deploy] Socket check: $(ls -la /tmp/.X11-unix/ 2>&1 || echo 'no sockets')"
         pkill -9 Xvfb 2>/dev/null || true
     fi
 fi
