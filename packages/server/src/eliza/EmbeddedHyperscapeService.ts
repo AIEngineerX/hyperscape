@@ -72,6 +72,29 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
   private _nearbyCache: NearbyEntityData[] = [];
   private _nearbyCacheTick = -1;
 
+  /** Double-buffer for getNearbyEntities to avoid slice() allocations */
+  private _nearbyBufferA: NearbyEntityData[] = [];
+  private _nearbyBufferB: NearbyEntityData[] = [];
+  private _useBufferA = true;
+
+  /** Pool of reusable NearbyEntityData objects to avoid per-entity allocations */
+  private _nearbyEntityPool: NearbyEntityData[] = [];
+  private _nearbyEntityPoolIndex = 0;
+
+  /** Cached getGameState result to avoid per-tick allocations */
+  private _gameStateCache: EmbeddedGameState | null = null;
+  private _gameStateCacheTick = -1;
+
+  /** Cached inventory/equipment to avoid repeated system lookups */
+  private _inventoryCache: Array<{
+    slot: number;
+    itemId: string;
+    quantity: number;
+  }> = [];
+  private _inventoryCacheTick = -1;
+  private _equipmentCache: Record<string, string | null> = {};
+  private _equipmentCacheTick = -1;
+
   /** Local chat message buffer - stores recent messages from nearby entities */
   private localChatBuffer: LocalChatMessage[] = [];
   private static readonly LOCAL_CHAT_BUFFER_SIZE = 10;
@@ -545,6 +568,12 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       return null;
     }
 
+    // Return cached result if same tick (avoids per-tick allocations)
+    const currentTick = this.world.currentTick ?? 0;
+    if (currentTick === this._gameStateCacheTick && this._gameStateCache) {
+      return this._gameStateCache;
+    }
+
     const player = this.world.entities.get(this.playerEntityId);
     if (!player) {
       return null;
@@ -558,25 +587,53 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     >;
     const inventory = this.getInventoryItems();
     const equippedRaw = this.getEquippedItems();
-    const equipment: Record<string, { itemId: string }> = {};
+
+    // Reuse equipment object if possible
+    const equipment = this._gameStateCache?.equipment || {};
+    // Clear old keys
+    for (const key in equipment) {
+      delete equipment[key];
+    }
     for (const [slot, itemId] of Object.entries(equippedRaw)) {
       if (itemId) equipment[slot] = { itemId };
     }
 
-    return {
-      playerId: this.playerEntityId,
-      position,
-      health: (data.health as number) || 10,
-      maxHealth: (data.maxHealth as number) || 10,
-      alive: data.alive !== false,
-      skills,
-      inventory,
-      equipment,
-      nearbyEntities: this.getNearbyEntities(),
-      inCombat: !!(data.inCombat || data.combatTarget),
-      currentTarget: (data.combatTarget as string) || null,
-      activePrayers: (data.activePrayers as string[]) || [],
-    };
+    // Reuse or create game state object
+    if (!this._gameStateCache) {
+      this._gameStateCache = {
+        playerId: this.playerEntityId,
+        position,
+        health: (data.health as number) || 10,
+        maxHealth: (data.maxHealth as number) || 10,
+        alive: data.alive !== false,
+        skills,
+        inventory,
+        equipment,
+        nearbyEntities: this.getNearbyEntities(),
+        inCombat: !!(data.inCombat || data.combatTarget),
+        currentTarget: (data.combatTarget as string) || null,
+        activePrayers: (data.activePrayers as string[]) || [],
+      };
+    } else {
+      // Update existing cached object in-place
+      this._gameStateCache.playerId = this.playerEntityId;
+      this._gameStateCache.position = position;
+      this._gameStateCache.health = (data.health as number) || 10;
+      this._gameStateCache.maxHealth = (data.maxHealth as number) || 10;
+      this._gameStateCache.alive = data.alive !== false;
+      this._gameStateCache.skills = skills;
+      this._gameStateCache.inventory = inventory;
+      this._gameStateCache.equipment = equipment;
+      this._gameStateCache.nearbyEntities = this.getNearbyEntities();
+      this._gameStateCache.inCombat = !!(data.inCombat || data.combatTarget);
+      this._gameStateCache.currentTarget =
+        (data.combatTarget as string) || null;
+      this._gameStateCache.activePrayers =
+        (data.activePrayers as string[]) || [];
+    }
+
+    this._gameStateCacheTick = currentTick;
+    return this._gameStateCache;
   }
 
   // ============================================================================
@@ -676,8 +733,10 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       return [];
     }
 
-    const nearby = this.nearbyBuffer;
+    // Use double-buffering: write to inactive buffer, then swap
+    const nearby = this._useBufferA ? this._nearbyBufferA : this._nearbyBufferB;
     nearby.length = 0;
+    this._nearbyEntityPoolIndex = 0;
 
     // Iterate through all entities — use distance-squared to avoid Math.sqrt
     for (const [id, entity] of this.world.entities.items.entries()) {
@@ -729,27 +788,37 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
         equippedWeapon = equipData.weapon.itemId;
       }
 
-      nearby.push({
-        id,
-        name: (entityData.name as string) || id,
-        type: entityType,
-        position: entityPos,
-        distance,
-        health: entityData.health as number | undefined,
-        maxHealth: entityData.maxHealth as number | undefined,
-        level: entityData.level as number | undefined,
-        mobType: entityData.mobType as string | undefined,
-        itemId: entityData.itemId as string | undefined,
-        resourceType: entityData.resourceType as string | undefined,
-        equippedWeapon,
-      });
+      // Reuse object from pool or create new one (pool grows once, then reuses)
+      let entityObj = this._nearbyEntityPool[this._nearbyEntityPoolIndex];
+      if (!entityObj) {
+        entityObj = {} as NearbyEntityData;
+        this._nearbyEntityPool[this._nearbyEntityPoolIndex] = entityObj;
+      }
+      this._nearbyEntityPoolIndex++;
+
+      // Update object in-place
+      entityObj.id = id;
+      entityObj.name = (entityData.name as string) || id;
+      entityObj.type = entityType;
+      entityObj.position = entityPos;
+      entityObj.distance = distance;
+      entityObj.health = entityData.health as number | undefined;
+      entityObj.maxHealth = entityData.maxHealth as number | undefined;
+      entityObj.level = entityData.level as number | undefined;
+      entityObj.mobType = entityData.mobType as string | undefined;
+      entityObj.itemId = entityData.itemId as string | undefined;
+      entityObj.resourceType = entityData.resourceType as string | undefined;
+      entityObj.equippedWeapon = equippedWeapon;
+
+      nearby.push(entityObj);
     }
 
     // Sort by distance
     nearby.sort((a, b) => a.distance - b.distance);
 
-    // Cache a snapshot — callers must not see mutations from the next scan
-    this._nearbyCache = nearby.slice();
+    // Swap buffers - the inactive buffer becomes the cache
+    this._useBufferA = !this._useBufferA;
+    this._nearbyCache = nearby;
     this._nearbyCacheTick = currentTick;
 
     return this._nearbyCache;
@@ -1650,6 +1719,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
    * Get the agent's actual inventory from InventorySystem (not entity data).
    * Entity data.inventory is often empty — the real inventory lives in
    * InventorySystem's playerInventories Map.
+   * Uses tick-based caching to avoid per-tick allocations.
    */
   getInventoryItems(): Array<{
     slot: number;
@@ -1657,6 +1727,12 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     quantity: number;
   }> {
     if (!this.playerEntityId || !this.isActive) return [];
+
+    // Return cached result if same tick
+    const currentTick = this.world.currentTick ?? 0;
+    if (currentTick === this._inventoryCacheTick) {
+      return this._inventoryCache;
+    }
 
     const inventorySystem = this.world.getSystem("inventory") as {
       getInventory?: (playerId: string) =>
@@ -1676,18 +1752,52 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     const inv = inventorySystem.getInventory(this.playerEntityId);
     if (!inv) return [];
 
-    return inv.items.map((i) => ({
-      slot: i.slot,
-      itemId: i.itemId,
-      quantity: i.quantity,
-    }));
+    // Reuse existing cache array, updating in-place where possible
+    const items = inv.items;
+    this._inventoryCache.length = items.length;
+    for (let i = 0; i < items.length; i++) {
+      const src = items[i];
+      let dst = this._inventoryCache[i];
+      if (!dst) {
+        dst = { slot: 0, itemId: "", quantity: 0 };
+        this._inventoryCache[i] = dst;
+      }
+      dst.slot = src.slot;
+      dst.itemId = src.itemId;
+      dst.quantity = src.quantity;
+    }
+
+    this._inventoryCacheTick = currentTick;
+    return this._inventoryCache;
   }
+
+  /** Slot names for equipment - defined once to avoid per-call array creation */
+  private static readonly EQUIPMENT_SLOT_NAMES = [
+    "weapon",
+    "shield",
+    "helmet",
+    "body",
+    "legs",
+    "boots",
+    "gloves",
+    "cape",
+    "amulet",
+    "ring",
+    "arrows",
+  ] as const;
 
   /**
    * Get the agent's currently equipped items from EquipmentSystem.
+   * Uses tick-based caching to avoid per-tick allocations.
    */
   getEquippedItems(): Record<string, string | null> {
     if (!this.playerEntityId || !this.isActive) return {};
+
+    // Return cached result if same tick
+    const currentTick = this.world.currentTick ?? 0;
+    if (currentTick === this._equipmentCacheTick) {
+      return this._equipmentCache;
+    }
 
     const equipmentSystem = this.world.getSystem("equipment") as {
       getPlayerEquipment?: (
@@ -1700,32 +1810,21 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     const eq = equipmentSystem.getPlayerEquipment(this.playerEntityId);
     if (!eq) return {};
 
-    const result: Record<string, string | null> = {};
-    const slotNames = [
-      "weapon",
-      "shield",
-      "helmet",
-      "body",
-      "legs",
-      "boots",
-      "gloves",
-      "cape",
-      "amulet",
-      "ring",
-      "arrows",
-    ];
-    for (const slot of slotNames) {
+    // Update cached object in-place
+    for (const slot of EmbeddedHyperscapeService.EQUIPMENT_SLOT_NAMES) {
       const slotData = eq[slot] as
         | { itemId?: string | number | null }
         | null
         | undefined;
       if (slotData?.itemId) {
-        result[slot] = String(slotData.itemId);
+        this._equipmentCache[slot] = String(slotData.itemId);
       } else {
-        result[slot] = null;
+        this._equipmentCache[slot] = null;
       }
     }
-    return result;
+
+    this._equipmentCacheTick = currentTick;
+    return this._equipmentCache;
   }
 
   /**

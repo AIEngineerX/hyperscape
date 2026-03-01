@@ -1097,6 +1097,10 @@ export class Physics extends SystemBase implements IPhysics {
 
   override postFixedUpdate(delta: number): void {
     if (!this.scene) return; // Skip if physics not initialized
+
+    // DEBUG: Skip physics simulation on server to test memory leak
+    if (this.world.isServer) return;
+
     this.scene.simulate(delta);
     this.scene.fetchResults(true);
 

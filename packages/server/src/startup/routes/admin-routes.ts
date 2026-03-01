@@ -16,6 +16,7 @@ import {
   exitMaintenanceMode,
   getMaintenanceStatus,
 } from "../maintenance-mode.js";
+import { getMemoryMonitor } from "../../infrastructure/memory-monitor.js";
 
 /**
  * Rate limiter for admin authentication attempts.
@@ -33,6 +34,41 @@ const adminAuthAttempts = new Map<string, AdminAuthAttempt>();
 const ADMIN_AUTH_MAX_ATTEMPTS = 5;
 const ADMIN_AUTH_WINDOW_MS = 60 * 1000; // 1 minute
 const ADMIN_AUTH_LOCKOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+// Memory leak prevention: max entries and cleanup interval
+const ADMIN_AUTH_MAX_ENTRIES = 10_000;
+const ADMIN_AUTH_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+/** Periodic cleanup to prevent unbounded memory growth */
+function cleanupStaleAuthAttempts(): void {
+  const now = Date.now();
+  const staleThreshold = now - ADMIN_AUTH_LOCKOUT_MS - ADMIN_AUTH_WINDOW_MS;
+
+  for (const [ip, attempt] of adminAuthAttempts) {
+    // Remove entries that are past their lockout and window period
+    if (attempt.lastAttempt < staleThreshold && attempt.blockedUntil < now) {
+      adminAuthAttempts.delete(ip);
+    }
+  }
+
+  // If still over limit, remove oldest entries
+  if (adminAuthAttempts.size > ADMIN_AUTH_MAX_ENTRIES) {
+    const entries = Array.from(adminAuthAttempts.entries()).sort(
+      (a, b) => a[1].lastAttempt - b[1].lastAttempt,
+    );
+    const toRemove = entries.slice(0, entries.length - ADMIN_AUTH_MAX_ENTRIES);
+    for (const [ip] of toRemove) {
+      adminAuthAttempts.delete(ip);
+    }
+  }
+}
+
+// Start periodic cleanup (unref to not keep process alive)
+const adminAuthCleanupTimer = setInterval(
+  cleanupStaleAuthAttempts,
+  ADMIN_AUTH_CLEANUP_INTERVAL_MS,
+);
+adminAuthCleanupTimer.unref?.();
 
 /**
  * Timing-safe string comparison to prevent timing attacks.
@@ -2144,6 +2180,185 @@ export function registerAdminRoutes(
       } catch (err) {
         console.error("[AdminRoutes] Agent kills error:", err);
         return reply.code(500).send({ error: "Failed to fetch kill data" });
+      }
+    },
+  );
+
+  // ==========================================
+  // Memory Monitoring Endpoints
+  // ==========================================
+
+  /** Get memory monitoring report and statistics */
+  fastify.get(
+    "/admin/memory/report",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const monitor = getMemoryMonitor();
+        const stats = monitor.getStats();
+        const collections = monitor.getCollectionMetrics();
+        const samples = monitor.getSamples();
+        const MB = 1024 * 1024;
+
+        return reply.send({
+          uptime: stats.uptime,
+          uptimeMinutes: (stats.uptime / 1000 / 60).toFixed(1),
+          trend: stats.memoryTrend,
+          growthRateMBPerMin: stats.growthRateMBPerMin.toFixed(2),
+          currentMemory: stats.currentMemory
+            ? {
+                rssMB: (stats.currentMemory.rss / MB).toFixed(1),
+                heapUsedMB: (stats.currentMemory.heapUsed / MB).toFixed(1),
+                heapTotalMB: (stats.currentMemory.heapTotal / MB).toFixed(1),
+                externalMB: (stats.currentMemory.external / MB).toFixed(1),
+              }
+            : null,
+          collections: collections.slice(0, 20),
+          leakWarningCount: stats.leakWarningCount,
+          recentWarnings: stats.recentWarnings,
+          sampleCount: samples.length,
+        });
+      } catch (err) {
+        console.error("[AdminRoutes] Memory report error:", err);
+        return reply
+          .code(500)
+          .send({ error: "Failed to generate memory report" });
+      }
+    },
+  );
+
+  /** Trigger manual garbage collection */
+  fastify.post(
+    "/admin/memory/gc",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const monitor = getMemoryMonitor();
+        const beforeMem = process.memoryUsage();
+        const success = monitor.forceGC();
+        const afterMem = process.memoryUsage();
+        const MB = 1024 * 1024;
+
+        return reply.send({
+          success,
+          freedMB: ((beforeMem.heapUsed - afterMem.heapUsed) / MB).toFixed(1),
+          beforeHeapMB: (beforeMem.heapUsed / MB).toFixed(1),
+          afterHeapMB: (afterMem.heapUsed / MB).toFixed(1),
+        });
+      } catch (err) {
+        console.error("[AdminRoutes] GC trigger error:", err);
+        return reply.code(500).send({ error: "Failed to trigger GC" });
+      }
+    },
+  );
+
+  /** Get memory samples for graphing */
+  fastify.get(
+    "/admin/memory/samples",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const monitor = getMemoryMonitor();
+        const samples = monitor.getSamples();
+        const MB = 1024 * 1024;
+
+        return reply.send({
+          samples: samples.map((s) => ({
+            timestamp: s.timestamp,
+            rssMB: (s.rss / MB).toFixed(1),
+            heapUsedMB: (s.heapUsed / MB).toFixed(1),
+            heapTotalMB: (s.heapTotal / MB).toFixed(1),
+          })),
+        });
+      } catch (err) {
+        console.error("[AdminRoutes] Memory samples error:", err);
+        return reply.code(500).send({ error: "Failed to get memory samples" });
+      }
+    },
+  );
+
+  /** Get plain text memory report */
+  fastify.get(
+    "/admin/memory/report.txt",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const monitor = getMemoryMonitor();
+        const report = monitor.generateReport();
+        return reply.type("text/plain").send(report);
+      } catch (err) {
+        console.error("[AdminRoutes] Memory report error:", err);
+        return reply.code(500).send("Failed to generate memory report");
+      }
+    },
+  );
+
+  /** Write V8 heap snapshot for memory profiling */
+  fastify.post(
+    "/admin/memory/heap-snapshot",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const monitor = getMemoryMonitor();
+        const snapshotPath = monitor.writeHeapSnapshot();
+
+        if (snapshotPath) {
+          // Also print detailed heap stats
+          monitor.printHeapStats();
+
+          return reply.send({
+            success: true,
+            path: snapshotPath,
+            message: "Heap snapshot written. Use Chrome DevTools to analyze.",
+          });
+        } else {
+          return reply.code(500).send({
+            success: false,
+            error: "Failed to write heap snapshot",
+          });
+        }
+      } catch (err) {
+        console.error("[AdminRoutes] Heap snapshot error:", err);
+        return reply.code(500).send({ error: "Failed to write heap snapshot" });
+      }
+    },
+  );
+
+  /** Get V8 heap statistics */
+  fastify.get(
+    "/admin/memory/heap-stats",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const monitor = getMemoryMonitor();
+        const heapStats = monitor.getHeapStatistics();
+        const heapSpaces = monitor.getHeapSpaceStatistics();
+        const MB = 1024 * 1024;
+
+        return reply.send({
+          heap: {
+            totalHeapSizeMB: (heapStats.total_heap_size / MB).toFixed(1),
+            usedHeapSizeMB: (heapStats.used_heap_size / MB).toFixed(1),
+            heapSizeLimitMB: (heapStats.heap_size_limit / MB).toFixed(1),
+            externalMemoryMB: (heapStats.external_memory / MB).toFixed(1),
+            mallocedMemoryMB: (heapStats.malloced_memory / MB).toFixed(1),
+            peakMallocedMemoryMB: (heapStats.peak_malloced_memory / MB).toFixed(
+              1,
+            ),
+            numberOfNativeContexts: heapStats.number_of_native_contexts,
+            numberOfDetachedContexts: heapStats.number_of_detached_contexts,
+          },
+          spaces: heapSpaces.map((space) => ({
+            name: space.space_name,
+            sizeMB: (space.space_size / MB).toFixed(2),
+            usedSizeMB: (space.space_used_size / MB).toFixed(2),
+            availableSizeMB: (space.space_available_size / MB).toFixed(2),
+            physicalSizeMB: (space.physical_space_size / MB).toFixed(2),
+          })),
+        });
+      } catch (err) {
+        console.error("[AdminRoutes] Heap stats error:", err);
+        return reply.code(500).send({ error: "Failed to get heap statistics" });
       }
     },
   );

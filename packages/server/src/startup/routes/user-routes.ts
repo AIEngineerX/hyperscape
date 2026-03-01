@@ -24,6 +24,40 @@ const checkRateLimits = new Map<string, CheckAttempt>();
 const CHECK_RATE_LIMIT = 30;
 const CHECK_RATE_WINDOW_MS = 60 * 1000;
 
+// Memory leak prevention: max entries and cleanup interval
+const CHECK_RATE_MAX_ENTRIES = 50_000;
+const CHECK_RATE_CLEANUP_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
+
+/** Periodic cleanup to prevent unbounded memory growth */
+function cleanupStaleCheckAttempts(): void {
+  const now = Date.now();
+
+  for (const [ip, attempt] of checkRateLimits) {
+    // Remove entries where the window has expired
+    if (attempt.resetTime < now) {
+      checkRateLimits.delete(ip);
+    }
+  }
+
+  // If still over limit, remove oldest entries (by resetTime)
+  if (checkRateLimits.size > CHECK_RATE_MAX_ENTRIES) {
+    const entries = Array.from(checkRateLimits.entries()).sort(
+      (a, b) => a[1].resetTime - b[1].resetTime,
+    );
+    const toRemove = entries.slice(0, entries.length - CHECK_RATE_MAX_ENTRIES);
+    for (const [ip] of toRemove) {
+      checkRateLimits.delete(ip);
+    }
+  }
+}
+
+// Start periodic cleanup (unref to not keep process alive)
+const checkRateLimitCleanupTimer = setInterval(
+  cleanupStaleCheckAttempts,
+  CHECK_RATE_CLEANUP_INTERVAL_MS,
+);
+checkRateLimitCleanupTimer.unref?.();
+
 /**
  * Check rate limit for /api/users/check endpoint.
  * Returns true if allowed, false if rate limited.

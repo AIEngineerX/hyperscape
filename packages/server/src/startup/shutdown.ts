@@ -42,6 +42,7 @@ import { getStreamingDuelScheduler } from "../systems/StreamingDuelScheduler/ind
 import { getDuelMarketMaker } from "../arena/DuelMarketMaker.js";
 import { destroyAllRateLimiters } from "../systems/ServerNetwork/services/SlidingWindowRateLimiter.js";
 import { destroyIdempotencyService } from "../systems/ServerNetwork/services/IdempotencyService.js";
+import { stopMemoryMonitor } from "../infrastructure/memory-monitor.js";
 
 /**
  * Web3 context for chain writer shutdown
@@ -230,7 +231,15 @@ export function registerShutdownHandlers(
     // Step 7: Stop Docker containers
     await stopDocker(context);
 
-    // Step 8: Clear startup flag
+    // Step 8: Stop memory monitor
+    try {
+      stopMemoryMonitor();
+      console.log("[Shutdown] ✅ Memory monitor stopped");
+    } catch {
+      // Memory monitor may not have been started
+    }
+
+    // Step 9: Clear startup flag
     clearStartupFlag();
 
     console.log("[Shutdown] ✅ Graceful shutdown complete");

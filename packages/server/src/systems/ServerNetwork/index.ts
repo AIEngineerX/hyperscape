@@ -422,6 +422,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     fn: (...args: unknown[]) => void;
   }> = [];
 
+  /** Cleanup function for duel event listeners */
+  private cleanupDuelEventListeners: (() => void) | null = null;
+
   constructor(world: World) {
     super(world);
     this.id = 0;
@@ -876,7 +879,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     );
 
     // Register all duel world-event listeners (countdown, fight, stakes, etc.)
-    registerDuelEventListeners({
+    // Store cleanup function for proper teardown in destroy()
+    this.cleanupDuelEventListeners = registerDuelEventListeners({
       world: this.world,
       broadcastManager: this.broadcastManager,
       getSocketByPlayerId: this.getSocketByPlayerId.bind(this),
@@ -2838,6 +2842,12 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     ServerNetwork.agentAvailableGoals.clear();
     ServerNetwork.agentGoalsPaused.clear();
     ServerNetwork.agentThoughts.clear();
+
+    // Clean up duel event listeners to prevent memory leak
+    if (this.cleanupDuelEventListeners) {
+      this.cleanupDuelEventListeners();
+      this.cleanupDuelEventListeners = null;
+    }
 
     // Destroy trading system first - cancels all active trades and clears cleanup interval
     if (this.tradingSystem) {

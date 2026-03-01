@@ -24,6 +24,13 @@ import { initStreamingDuelScheduler } from "./systems/StreamingDuelScheduler/ind
 // Import stream capture pipeline
 import { initStreamCapture } from "./streaming/stream-capture.js";
 
+// Import memory monitoring infrastructure
+import {
+  startMemoryMonitor as startMemoryMonitorInfra,
+  type MemoryMonitorConfig,
+} from "./infrastructure/memory-monitor.js";
+import type { World } from "@hyperscape/shared";
+
 function resolveBooleanEnvFlag(name: string, defaultEnabled: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined) return defaultEnabled;
@@ -471,6 +478,16 @@ function startMemoryMonitor(world: unknown): void {
     8,
     parseInt(process.env.MEMORY_COLLECTION_LIMIT || "12", 10) || 12,
   );
+  const memLimitGB = Number(process.env.MEMORY_LIMIT_GB) || 12;
+
+  // Start the memory monitoring infrastructure (provides trend analysis, leak detection, API)
+  const monitorConfig: MemoryMonitorConfig = {
+    sampleIntervalMs: INTERVAL_MS,
+    memoryLimitGB: memLimitGB,
+    verbose: collectionDebugEnabled,
+    trackCollections: collectionDebugEnabled,
+  };
+  startMemoryMonitorInfra(world as World, monitorConfig);
 
   // Production GC hint: periodically nudge the runtime to collect garbage.
   // Runs every 60s regardless of the memory monitor interval.
@@ -521,7 +538,6 @@ function startMemoryMonitor(world: unknown): void {
         process.stderr.write(`[MemoryNetwork] ${networkSummary}\n`);
       }
     }
-    const memLimitGB = Number(process.env.MEMORY_LIMIT_GB) || 12;
 
     // Soft warning at 80% of limit — trigger GC and log a warning
     const softLimitBytes = memLimitGB * 1024 * MB * 0.8;

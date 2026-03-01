@@ -228,8 +228,12 @@ export class GameTickProcessor {
   private readonly _onPlayerJoined = () => {
     this.playerOrderDirty = true;
   };
-  private readonly _onPlayerLeft = () => {
+  private readonly _onPlayerLeft = (event: { playerId: string }) => {
     this.playerOrderDirty = true;
+    // Clean up script queue state for disconnected player to prevent memory leak
+    if (this.playerScriptQueue) {
+      this.playerScriptQueue.cleanup(event.playerId);
+    }
   };
   private readonly _onPlayerRespawned = () => {
     this.playerOrderDirty = true;
@@ -883,5 +887,13 @@ export class GameTickProcessor {
     this.broadcastQueue = [];
     this.npcProcessingOrder = [];
     this.playerProcessingOrder = [];
+
+    // Destroy script queues to prevent memory leaks
+    if (this.playerScriptQueue) {
+      this.playerScriptQueue.destroy();
+    }
+    if (this.npcScriptQueue) {
+      this.npcScriptQueue.destroy();
+    }
   }
 }

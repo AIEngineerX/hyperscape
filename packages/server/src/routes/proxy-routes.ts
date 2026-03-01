@@ -102,7 +102,35 @@ const WS_PROXY_MAX_PENDING_OPEN_MESSAGES = parseEnvInt(
 );
 const rpcResponseCache = new Map<string, CachedRpcResponse>();
 let rpcResponseCacheTotalBytes = 0;
-const rpcInflightRequests = new Map<string, Promise<ProxiedRpcResponse>>();
+
+/** Track inflight requests with timestamps for cleanup */
+interface InflightRequest {
+  promise: Promise<ProxiedRpcResponse>;
+  startedAt: number;
+}
+const rpcInflightRequests = new Map<string, InflightRequest>();
+
+// Memory leak prevention: cleanup stale inflight requests after 2 minutes
+const RPC_INFLIGHT_STALE_MS = 2 * 60 * 1000;
+const RPC_INFLIGHT_CLEANUP_INTERVAL_MS = 30 * 1000;
+
+function cleanupStaleInflightRequests(): void {
+  const now = Date.now();
+  const staleThreshold = now - RPC_INFLIGHT_STALE_MS;
+
+  for (const [key, entry] of rpcInflightRequests) {
+    if (entry.startedAt < staleThreshold) {
+      rpcInflightRequests.delete(key);
+    }
+  }
+}
+
+// Start periodic cleanup (unref to not keep process alive)
+const inflightCleanupTimer = setInterval(
+  cleanupStaleInflightRequests,
+  RPC_INFLIGHT_CLEANUP_INTERVAL_MS,
+);
+inflightCleanupTimer.unref?.();
 
 function normalizeCluster(
   value: unknown,
@@ -394,7 +422,7 @@ async function proxySolanaRpcRequest(
   if (cacheKey) {
     const inflight = rpcInflightRequests.get(cacheKey);
     if (inflight) {
-      const shared = await inflight;
+      const shared = await inflight.promise;
       const adjustedBody = rewriteRpcResponseIds(shared.body, requestBody);
       reply.header("Content-Type", shared.contentType);
       reply.header("x-rpc-cache", "coalesced");
@@ -447,7 +475,10 @@ async function proxySolanaRpcRequest(
 
   const proxyPromise = executeProxy();
   if (cacheKey) {
-    rpcInflightRequests.set(cacheKey, proxyPromise);
+    rpcInflightRequests.set(cacheKey, {
+      promise: proxyPromise,
+      startedAt: Date.now(),
+    });
   }
 
   try {

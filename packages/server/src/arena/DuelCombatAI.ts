@@ -210,6 +210,12 @@ export class DuelCombatAI {
   private _lastEngageTick = 0;
   /** How often (in ticks) to force re-engagement as a keep-alive. */
   private static readonly RE_ENGAGE_INTERVAL = 5;
+  /** Reusable OpponentData object to avoid per-tick allocations */
+  private _cachedOpponentData: OpponentData = {
+    health: 0,
+    maxHealth: 0,
+    distance: 0,
+  };
 
   constructor(
     service: EmbeddedHyperscapeService,
@@ -1004,11 +1010,11 @@ export class DuelCombatAI {
     for (let i = 0; i < state.nearbyEntities.length; i++) {
       const e = state.nearbyEntities[i];
       if (e.id === this.opponentId) {
-        return {
-          health: e.health ?? 0,
-          maxHealth: e.maxHealth ?? 0,
-          distance: e.distance,
-        };
+        // Reuse cached object to avoid per-tick allocation
+        this._cachedOpponentData.health = e.health ?? 0;
+        this._cachedOpponentData.maxHealth = e.maxHealth ?? 0;
+        this._cachedOpponentData.distance = e.distance;
+        return this._cachedOpponentData;
       }
     }
     return null;

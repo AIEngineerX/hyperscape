@@ -147,6 +147,62 @@ export class StreamingDuelScheduler {
   /** Scheduler state for state machine */
   private schedulerState: "IDLE" | "WAITING_FOR_AGENTS" | "ACTIVE" = "IDLE";
 
+  // ---- Streaming State Cache (Memory Optimization) ----
+  /** Cached streaming state to avoid recreating objects every 500ms */
+  private _cachedStreamingState: StreamingStateUpdate | null = null;
+  /** Last tick when streaming state was fully regenerated */
+  private _lastStreamingStateTick = -1;
+  /** Current game tick counter (updated by tick loop) */
+  private _currentTick = 0;
+  /** Last phase when state was generated (for cache invalidation) */
+  private _lastStreamingStatePhase: StreamingPhase | null = null;
+  /** Last cycle ID when state was generated */
+  private _lastStreamingStateCycleId: string | null = null;
+  /** Cached agent objects to avoid recreation (reused in getStreamingState) */
+  private _cachedAgent1: StreamingStateUpdate["cycle"]["agent1"] = null;
+  private _cachedAgent2: StreamingStateUpdate["cycle"]["agent1"] = null;
+  /** Pre-allocated idle cycle object (reused when no active cycle) */
+  private readonly _idleCycleObject: StreamingStateUpdate["cycle"] = {
+    cycleId: "",
+    phase: "IDLE",
+    cycleStartTime: 0,
+    phaseStartTime: 0,
+    phaseEndTime: 0,
+    timeRemaining: 0,
+    agent1: null,
+    agent2: null,
+    countdown: null,
+    fightStartTime: null,
+    arenaPositions: null,
+    winnerId: null,
+    winnerName: null,
+    winReason: null,
+  };
+  /** Pre-allocated active cycle object (reused during active cycle) */
+  private readonly _activeCycleObject: StreamingStateUpdate["cycle"] = {
+    cycleId: "",
+    phase: "IDLE",
+    cycleStartTime: 0,
+    phaseStartTime: 0,
+    phaseEndTime: 0,
+    timeRemaining: 0,
+    agent1: null,
+    agent2: null,
+    countdown: null,
+    fightStartTime: null,
+    arenaPositions: null,
+    winnerId: null,
+    winnerName: null,
+    winReason: null,
+  };
+  /** Pre-allocated streaming state return object */
+  private readonly _streamingStateObject: StreamingStateUpdate = {
+    type: "STREAMING_STATE_UPDATE",
+    cycle: this._idleCycleObject,
+    leaderboard: [],
+    cameraTarget: null,
+  };
+
   constructor(world: World) {
     this.world = world;
 
@@ -1390,105 +1446,237 @@ export class StreamingDuelScheduler {
     }
   }
 
-  /** Get current streaming state for broadcast */
+  /**
+   * Get current streaming state for broadcast.
+   * MEMORY OPTIMIZATION: Reuses pre-allocated objects to avoid GC pressure.
+   * Only creates new contestant objects when agents change.
+   */
   getStreamingState(): StreamingStateUpdate {
     const now = Date.now();
     const leaderboard = this.matchmaking.getLeaderboard();
 
     if (!this.currentCycle) {
+      // IDLE state - use pre-allocated idle cycle object
       const previewPair = this.camera.getIdlePreviewPairSnapshot();
       let previewAgent1Id = previewPair?.agent1Id ?? null;
       let previewAgent2Id = previewPair?.agent2Id ?? null;
 
       if (!previewAgent1Id || !previewAgent2Id) {
-        const fallbackIds: string[] = [];
+        // Collect fallback IDs without allocating if possible
+        let fallbackCount = 0;
+        let fallback1: string | null = null;
+        let fallback2: string | null = null;
         for (const agentId of this.matchmaking.availableAgents) {
           if (!this.camera.isAgentValidCameraCandidate(agentId)) {
             continue;
           }
-          fallbackIds.push(agentId);
-          if (fallbackIds.length >= config.minAgents) {
+          if (fallbackCount === 0) {
+            fallback1 = agentId;
+          } else if (fallbackCount === 1) {
+            fallback2 = agentId;
+          }
+          fallbackCount++;
+          if (fallbackCount >= config.minAgents) {
             break;
           }
         }
-        previewAgent1Id = fallbackIds[0] ?? null;
-        previewAgent2Id = fallbackIds[1] ?? null;
+        previewAgent1Id = previewAgent1Id ?? fallback1;
+        previewAgent2Id = previewAgent2Id ?? fallback2;
       }
 
-      const previewAgent1 = previewAgent1Id
-        ? this.orchestrator.createContestant(
-            previewAgent1Id,
-            previewAgent2Id ?? undefined,
-          )
+      // Only create contestant objects if IDs changed (reduces allocations)
+      const needAgent1Update =
+        this._cachedAgent1 === null ||
+        (this._cachedAgent1 as { id?: string })?.id !== previewAgent1Id;
+      const needAgent2Update =
+        this._cachedAgent2 === null ||
+        (this._cachedAgent2 as { id?: string })?.id !== previewAgent2Id;
+
+      if (needAgent1Update && previewAgent1Id) {
+        const contestant = this.orchestrator.createContestant(
+          previewAgent1Id,
+          previewAgent2Id ?? undefined,
+        );
+        this._cachedAgent1 = this.toStreamingCycleAgentInPlace(
+          contestant,
+          this._cachedAgent1,
+        );
+      } else if (!previewAgent1Id) {
+        this._cachedAgent1 = null;
+      }
+
+      if (needAgent2Update && previewAgent2Id) {
+        const contestant = this.orchestrator.createContestant(
+          previewAgent2Id,
+          previewAgent1Id ?? undefined,
+        );
+        this._cachedAgent2 = this.toStreamingCycleAgentInPlace(
+          contestant,
+          this._cachedAgent2,
+        );
+      } else if (!previewAgent2Id) {
+        this._cachedAgent2 = null;
+      }
+
+      // Update idle cycle object in place (zero allocation)
+      this._idleCycleObject.cycleStartTime = now;
+      this._idleCycleObject.phaseStartTime = now;
+      this._idleCycleObject.phaseEndTime = now;
+      this._idleCycleObject.agent1 = this._cachedAgent1;
+      this._idleCycleObject.agent2 = this._cachedAgent2;
+
+      // Build camera IDs without allocation if possible
+      const cameraId1 = this._cachedAgent1
+        ? (this._cachedAgent1 as { id?: string }).id
         : null;
-      const previewAgent2 = previewAgent2Id
-        ? this.orchestrator.createContestant(
-            previewAgent2Id,
-            previewAgent1Id ?? undefined,
-          )
+      const cameraId2 = this._cachedAgent2
+        ? (this._cachedAgent2 as { id?: string }).id
         : null;
-      const preferredCameraIds = [
-        previewAgent1?.characterId,
-        previewAgent2?.characterId,
-      ].filter((id): id is string => Boolean(id && id.length > 0));
+
+      // Use inline array to avoid allocation when possible
+      const preferredCameraIds: string[] = [];
+      if (cameraId1) preferredCameraIds.push(cameraId1);
+      if (cameraId2) preferredCameraIds.push(cameraId2);
+
       const idleCameraTarget =
         this.camera.getIdleCameraTargetSnapshot(preferredCameraIds);
 
-      return {
-        type: "STREAMING_STATE_UPDATE",
-        cycle: {
-          cycleId: "",
-          phase: "IDLE",
-          cycleStartTime: now,
-          phaseStartTime: now,
-          phaseEndTime: now,
-          timeRemaining: 0,
-          agent1: this.toStreamingCycleAgent(previewAgent1),
-          agent2: this.toStreamingCycleAgent(previewAgent2),
-          countdown: null,
-          fightStartTime: null,
-          arenaPositions: null,
-          winnerId: null,
-          winnerName: null,
-          winReason: null,
-        },
-        leaderboard,
-        cameraTarget: idleCameraTarget,
-      };
+      // Update return object in place
+      this._streamingStateObject.cycle = this._idleCycleObject;
+      this._streamingStateObject.leaderboard = leaderboard;
+      this._streamingStateObject.cameraTarget = idleCameraTarget;
+
+      return this._streamingStateObject;
     }
 
+    // ACTIVE CYCLE - use pre-allocated active cycle object
     const { agent1, agent2 } = this.currentCycle;
     const phaseEndTime = this.getPhaseEndTime();
     const timeRemaining = Math.max(0, phaseEndTime - now);
-
     const cameraTarget = this.getCycleCameraTargetSnapshot();
 
-    return {
-      type: "STREAMING_STATE_UPDATE",
-      cycle: {
-        cycleId: this.currentCycle.cycleId,
-        phase: this.currentCycle.phase,
-        cycleStartTime: this.currentCycle.cycleStartTime,
-        phaseStartTime: this.currentCycle.phaseStartTime,
-        phaseEndTime,
-        timeRemaining,
-        agent1: this.toStreamingCycleAgent(agent1),
-        agent2: this.toStreamingCycleAgent(agent2),
-        countdown: this.currentCycle.countdownValue,
-        fightStartTime: this.currentCycle.fightStartTime ?? null,
-        arenaPositions: this.currentCycle.arenaPositions ?? null,
-        winnerId: this.currentCycle.winnerId,
-        winnerName: this.currentCycle.winnerId
-          ? (this.currentCycle.agent1?.characterId ===
-            this.currentCycle.winnerId
-              ? this.currentCycle.agent1?.name
-              : this.currentCycle.agent2?.name) || null
-          : null,
-        winReason: this.currentCycle.winReason,
-      },
-      leaderboard,
-      cameraTarget,
-    };
+    // Check if we need to update agent objects (only when agent changes or health changes)
+    const currentCycleId = this.currentCycle.cycleId;
+    const cycleChanged = this._lastStreamingStateCycleId !== currentCycleId;
+
+    if (cycleChanged || this._cachedAgent1 === null) {
+      this._cachedAgent1 = this.toStreamingCycleAgentInPlace(
+        agent1,
+        this._cachedAgent1,
+      );
+    } else if (agent1) {
+      // Update HP in place (most common change during fight)
+      this.updateAgentHpInPlace(this._cachedAgent1, agent1);
+    }
+
+    if (cycleChanged || this._cachedAgent2 === null) {
+      this._cachedAgent2 = this.toStreamingCycleAgentInPlace(
+        agent2,
+        this._cachedAgent2,
+      );
+    } else if (agent2) {
+      // Update HP in place (most common change during fight)
+      this.updateAgentHpInPlace(this._cachedAgent2, agent2);
+    }
+
+    this._lastStreamingStateCycleId = currentCycleId;
+
+    // Update active cycle object in place
+    this._activeCycleObject.cycleId = currentCycleId;
+    this._activeCycleObject.phase = this.currentCycle.phase;
+    this._activeCycleObject.cycleStartTime = this.currentCycle.cycleStartTime;
+    this._activeCycleObject.phaseStartTime = this.currentCycle.phaseStartTime;
+    this._activeCycleObject.phaseEndTime = phaseEndTime;
+    this._activeCycleObject.timeRemaining = timeRemaining;
+    this._activeCycleObject.agent1 = this._cachedAgent1;
+    this._activeCycleObject.agent2 = this._cachedAgent2;
+    this._activeCycleObject.countdown = this.currentCycle.countdownValue;
+    this._activeCycleObject.fightStartTime =
+      this.currentCycle.fightStartTime ?? null;
+    this._activeCycleObject.arenaPositions =
+      this.currentCycle.arenaPositions ?? null;
+    this._activeCycleObject.winnerId = this.currentCycle.winnerId;
+    this._activeCycleObject.winnerName = this.currentCycle.winnerId
+      ? (this.currentCycle.agent1?.characterId === this.currentCycle.winnerId
+          ? this.currentCycle.agent1?.name
+          : this.currentCycle.agent2?.name) || null
+      : null;
+    this._activeCycleObject.winReason = this.currentCycle.winReason;
+
+    // Update return object in place
+    this._streamingStateObject.cycle = this._activeCycleObject;
+    this._streamingStateObject.leaderboard = leaderboard;
+    this._streamingStateObject.cameraTarget = cameraTarget;
+
+    return this._streamingStateObject;
+  }
+
+  /**
+   * Convert AgentContestant to streaming format, reusing existing object if possible.
+   * MEMORY OPTIMIZATION: Updates properties in place instead of creating new objects.
+   */
+  private toStreamingCycleAgentInPlace(
+    agent: AgentContestant | null,
+    existing: StreamingStateUpdate["cycle"]["agent1"],
+  ): StreamingStateUpdate["cycle"]["agent1"] {
+    if (!agent) {
+      return null;
+    }
+
+    // Reuse existing object if available
+    if (existing) {
+      existing.id = agent.characterId;
+      existing.name = agent.name;
+      existing.provider = agent.provider;
+      existing.model = agent.model;
+      existing.hp = agent.currentHp;
+      existing.maxHp = agent.maxHp;
+      existing.combatLevel = agent.combatLevel;
+      existing.wins = agent.wins;
+      existing.losses = agent.losses;
+      existing.damageDealtThisFight = agent.damageDealtThisFight;
+      existing.rank = agent.rank;
+      existing.headToHeadWins = agent.headToHeadWins;
+      existing.headToHeadLosses = agent.headToHeadLosses;
+      // Equipment: update in place by copying properties
+      if (agent.equipment) {
+        if (!existing.equipment) {
+          existing.equipment = {};
+        }
+        // Clear existing and copy new (avoids creating new object)
+        for (const key of Object.keys(
+          existing.equipment as Record<string, unknown>,
+        )) {
+          delete (existing.equipment as Record<string, unknown>)[key];
+        }
+        Object.assign(existing.equipment, agent.equipment);
+      } else {
+        existing.equipment = {};
+      }
+      // Inventory: we must use the reference since inventory items can change
+      // But cap at 28 items to match original
+      existing.inventory = Array.isArray(agent.inventory)
+        ? agent.inventory.slice(0, 28)
+        : [];
+      return existing;
+    }
+
+    // Create new object (only when no existing object)
+    return this.toStreamingCycleAgent(agent);
+  }
+
+  /**
+   * Update just HP fields in place (most common update during fights)
+   */
+  private updateAgentHpInPlace(
+    cached: StreamingStateUpdate["cycle"]["agent1"],
+    agent: AgentContestant,
+  ): void {
+    if (!cached) return;
+    cached.hp = agent.currentHp;
+    cached.maxHp = agent.maxHp;
+    cached.wins = agent.wins;
+    cached.losses = agent.losses;
   }
 
   // ============================================================================
