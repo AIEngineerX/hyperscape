@@ -913,11 +913,17 @@ async function setupBrowser() {
   });
 
   if (!selectedGameUrl) {
-    // First, do a quick WebGPU preflight test on a blank page
-    // This helps detect WebGPU initialization hangs before loading heavy game content
-    console.log("[Main] Running WebGPU preflight test on blank page...");
+    // First, do a quick WebGPU preflight test
+    // CRITICAL: WebGPU requires a secure context (HTTPS or localhost)
+    // about:blank is NOT a secure context, so navigator.gpu is undefined there
+    // We test on the first game URL candidate (localhost) which IS a secure context
+    const preflightUrl = GAME_URL_CANDIDATES[0] || "http://127.0.0.1:3333/";
+    console.log(`[Main] Running WebGPU preflight test on ${preflightUrl}...`);
     try {
-      await page.goto("about:blank", { timeout: 10000 });
+      await page.goto(preflightUrl, {
+        timeout: 30000,
+        waitUntil: "domcontentloaded",
+      });
       const webgpuTest = await testWebGpuInit(page, 20000);
 
       if (!webgpuTest.success) {
