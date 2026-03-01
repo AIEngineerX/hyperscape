@@ -48,6 +48,95 @@ export async function waitForGameLoad(
 }
 
 /**
+ * Wait for the loading screen DOM element to be hidden
+ * This verifies the loading screen UI is actually removed/hidden from the page
+ */
+export async function waitForLoadingScreenHidden(
+  page: Page,
+  timeout = 60000,
+): Promise<void> {
+  const POLL_INTERVAL_MS = 500;
+
+  // Wait for loading screen element to be hidden or removed
+  const hiddenHandle = await page
+    .waitForFunction(
+      () => {
+        // Check multiple possible loading screen selectors
+        const loadingScreen = document.querySelector(
+          ".loading-screen, [data-testid='loading-screen'], .LoadingScreen",
+        );
+
+        // If element doesn't exist, loading is complete
+        if (!loadingScreen) return true;
+
+        // Check if element is hidden via display or visibility
+        const style = window.getComputedStyle(loadingScreen);
+        if (style.display === "none" || style.visibility === "hidden") {
+          return true;
+        }
+
+        // Check if element is not in the DOM (removed)
+        if (!loadingScreen.isConnected) return true;
+
+        // Check if element has zero dimensions (hidden)
+        const rect = loadingScreen.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) return true;
+
+        // Check opacity
+        if (style.opacity === "0") return true;
+
+        return false;
+      },
+      undefined,
+      {
+        timeout,
+        polling: POLL_INTERVAL_MS,
+      },
+    )
+    .catch(() => null);
+
+  if (hiddenHandle) {
+    await hiddenHandle.dispose().catch(() => {});
+    return;
+  }
+
+  if (page.isClosed()) {
+    throw new Error("Page closed while waiting for loading screen to hide");
+  }
+
+  throw new Error(
+    `Timed out waiting for loading screen to hide after ${timeout}ms`,
+  );
+}
+
+/**
+ * Verify the loading screen is currently visible
+ * Returns true if loading screen is showing
+ */
+export async function isLoadingScreenVisible(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const loadingScreen = document.querySelector(
+      ".loading-screen, [data-testid='loading-screen'], .LoadingScreen",
+    );
+
+    if (!loadingScreen) return false;
+    if (!loadingScreen.isConnected) return false;
+
+    const style = window.getComputedStyle(loadingScreen);
+    if (style.display === "none" || style.visibility === "hidden") {
+      return false;
+    }
+
+    const rect = loadingScreen.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return false;
+
+    if (style.opacity === "0") return false;
+
+    return true;
+  });
+}
+
+/**
  * Wait for the player to spawn in the world
  */
 export async function waitForPlayerSpawn(
@@ -239,59 +328,242 @@ export async function closePanel(page: Page, panelId: string): Promise<void> {
 
 /**
  * Take a screenshot of the game canvas for visual testing
+ * Includes retry logic to ensure we capture actual rendered content
  */
 export async function takeGameScreenshot(
   page: Page,
   name: string,
+  options: { minSize?: number; maxRetries?: number; retryDelay?: number } = {},
 ): Promise<Buffer> {
   const screenshotPath = `screenshots/${name}.png`;
+  const minSize = options.minSize ?? 10000; // Require at least 10KB for valid screenshot
+  const maxRetries = options.maxRetries ?? 5;
+  const retryDelay = options.retryDelay ?? 500;
+
   await mkdir("screenshots", { recursive: true }).catch(() => {});
 
-  const canvasDataUrl = await page
-    .evaluate(() => {
-      const canvas = document.querySelector(
-        "canvas",
-      ) as HTMLCanvasElement | null;
-      if (!canvas || canvas.width <= 0 || canvas.height <= 0) {
-        return null;
-      }
-      try {
-        return canvas.toDataURL("image/png");
-      } catch {
-        return null;
-      }
-    })
-    .catch(() => null);
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    // Wait for canvas to be ready
+    const canvasReady = await page
+      .evaluate(() => {
+        const canvas = document.querySelector(
+          "canvas",
+        ) as HTMLCanvasElement | null;
+        if (!canvas) return false;
+        // Check canvas has meaningful dimensions
+        if (canvas.width < 100 || canvas.height < 100) return false;
+        // Check WebGL context is active
+        const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+        if (gl) {
+          const pixels = new Uint8Array(4);
+          gl.readPixels(
+            Math.floor(canvas.width / 2),
+            Math.floor(canvas.height / 2),
+            1,
+            1,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            pixels,
+          );
+          // Check if center pixel has any color (not just black)
+          return (
+            pixels[0] > 0 || pixels[1] > 0 || pixels[2] > 0 || pixels[3] > 0
+          );
+        }
+        return canvas.width > 0 && canvas.height > 0;
+      })
+      .catch(() => false);
 
-  if (
-    typeof canvasDataUrl === "string" &&
-    canvasDataUrl.startsWith("data:image/png;base64,")
-  ) {
-    const pngBuffer = Buffer.from(
-      canvasDataUrl.slice("data:image/png;base64,".length),
-      "base64",
-    );
-    await writeFile(screenshotPath, pngBuffer).catch(() => {});
-    return pngBuffer;
-  }
+    if (!canvasReady && attempt < maxRetries - 1) {
+      await page.waitForTimeout(retryDelay);
+      continue;
+    }
 
-  const canvas = await page.$("canvas");
-  if (canvas) {
-    const canvasScreenshot = await canvas
-      .screenshot({
-        path: screenshotPath,
-        timeout: 5_000,
+    // Try to get canvas data URL
+    const canvasDataUrl = await page
+      .evaluate(() => {
+        const canvas = document.querySelector(
+          "canvas",
+        ) as HTMLCanvasElement | null;
+        if (!canvas || canvas.width <= 0 || canvas.height <= 0) {
+          return null;
+        }
+        try {
+          return canvas.toDataURL("image/png");
+        } catch {
+          return null;
+        }
       })
       .catch(() => null);
-    if (canvasScreenshot) {
-      return canvasScreenshot;
+
+    if (
+      typeof canvasDataUrl === "string" &&
+      canvasDataUrl.startsWith("data:image/png;base64,")
+    ) {
+      const pngBuffer = Buffer.from(
+        canvasDataUrl.slice("data:image/png;base64,".length),
+        "base64",
+      );
+
+      // Check if screenshot is large enough (actual rendered content)
+      if (pngBuffer.length >= minSize) {
+        await writeFile(screenshotPath, pngBuffer).catch(() => {});
+        console.log(
+          `[Screenshot] Captured "${name}": ${pngBuffer.length} bytes (attempt ${attempt + 1})`,
+        );
+        return pngBuffer;
+      }
+
+      // Screenshot too small, retry if possible
+      if (attempt < maxRetries - 1) {
+        console.log(
+          `[Screenshot] "${name}" too small (${pngBuffer.length} bytes), retrying...`,
+        );
+        await page.waitForTimeout(retryDelay);
+        continue;
+      }
+
+      // Last attempt, accept whatever we got
+      await writeFile(screenshotPath, pngBuffer).catch(() => {});
+      console.log(
+        `[Screenshot] Captured "${name}": ${pngBuffer.length} bytes (fallback)`,
+      );
+      return pngBuffer;
+    }
+
+    // Fallback to Playwright screenshot
+    const canvas = await page.$("canvas");
+    if (canvas) {
+      const canvasScreenshot = await canvas
+        .screenshot({
+          path: screenshotPath,
+          timeout: 5_000,
+        })
+        .catch(() => null);
+      if (canvasScreenshot && canvasScreenshot.length >= minSize) {
+        console.log(
+          `[Screenshot] Captured "${name}": ${canvasScreenshot.length} bytes (playwright)`,
+        );
+        return canvasScreenshot;
+      }
+    }
+
+    if (attempt < maxRetries - 1) {
+      await page.waitForTimeout(retryDelay);
     }
   }
-  return await page.screenshot({
+
+  // Final fallback - full page screenshot
+  const fallback = await page.screenshot({
     path: screenshotPath,
     fullPage: true,
     timeout: 5_000,
   });
+  console.log(
+    `[Screenshot] Captured "${name}": ${fallback.length} bytes (fullpage fallback)`,
+  );
+  return fallback;
+}
+
+/**
+ * Compare two screenshots and return difference metrics
+ * Returns the percentage of pixels that are different
+ */
+export function compareScreenshots(
+  buffer1: Buffer,
+  buffer2: Buffer,
+): { identical: boolean; diffPercentage: number; diffPixels: number } {
+  // Quick check: if buffers are identical, screenshots are identical
+  if (buffer1.equals(buffer2)) {
+    return { identical: true, diffPercentage: 0, diffPixels: 0 };
+  }
+
+  // Buffers are different lengths - definitely not identical
+  if (buffer1.length !== buffer2.length) {
+    // Estimate difference based on size difference
+    const sizeDiff = Math.abs(buffer1.length - buffer2.length);
+    const avgSize = (buffer1.length + buffer2.length) / 2;
+    return {
+      identical: false,
+      diffPercentage: Math.min(100, (sizeDiff / avgSize) * 100),
+      diffPixels: sizeDiff,
+    };
+  }
+
+  // Compare byte by byte
+  let diffBytes = 0;
+  const minLength = Math.min(buffer1.length, buffer2.length);
+
+  for (let i = 0; i < minLength; i++) {
+    if (buffer1[i] !== buffer2[i]) {
+      diffBytes++;
+    }
+  }
+
+  const diffPercentage = (diffBytes / minLength) * 100;
+
+  return {
+    identical: diffBytes === 0,
+    diffPercentage,
+    diffPixels: diffBytes,
+  };
+}
+
+/**
+ * Assert that two screenshots are different (not pixel-identical)
+ * Throws an error if screenshots are identical, indicating something isn't working
+ */
+export function assertScreenshotsDifferent(
+  screenshot1: Buffer,
+  screenshot2: Buffer,
+  name1: string,
+  name2: string,
+  minDiffPercentage: number = 0.1,
+): void {
+  const comparison = compareScreenshots(screenshot1, screenshot2);
+
+  if (comparison.identical) {
+    throw new Error(
+      `Screenshots "${name1}" and "${name2}" are pixel-identical! ` +
+        `This indicates the game may not be rendering correctly or the scene isn't changing.`,
+    );
+  }
+
+  if (comparison.diffPercentage < minDiffPercentage) {
+    throw new Error(
+      `Screenshots "${name1}" and "${name2}" are nearly identical ` +
+        `(only ${comparison.diffPercentage.toFixed(4)}% different, ${comparison.diffPixels} bytes). ` +
+        `Expected at least ${minDiffPercentage}% difference. ` +
+        `This may indicate the game isn't responding to input.`,
+    );
+  }
+
+  console.log(
+    `[Screenshot] "${name1}" vs "${name2}": ${comparison.diffPercentage.toFixed(2)}% different (${comparison.diffPixels} bytes)`,
+  );
+}
+
+/**
+ * Take a screenshot and compare with a previous one, asserting they're different
+ */
+export async function takeAndCompareScreenshot(
+  page: Page,
+  name: string,
+  previousScreenshot: Buffer | null,
+  previousName: string | null,
+): Promise<Buffer> {
+  const screenshot = await takeGameScreenshot(page, name);
+
+  if (previousScreenshot && previousName) {
+    assertScreenshotsDifferent(
+      previousScreenshot,
+      screenshot,
+      previousName,
+      name,
+    );
+  }
+
+  return screenshot;
 }
 
 // ============================================================================

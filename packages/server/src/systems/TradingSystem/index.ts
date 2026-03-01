@@ -86,6 +86,23 @@ export class TradingSystem {
   /** Cleanup interval handle */
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
+  // Bound event handlers for proper cleanup (prevents memory leak)
+  private readonly _onPlayerLeft = (payload: unknown) => {
+    const data = payload as { playerId: string };
+    this.handlePlayerDisconnect(data.playerId);
+  };
+  private readonly _onPlayerLogout = (payload: unknown) => {
+    const data = payload as { playerId: string };
+    this.handlePlayerDisconnect(data.playerId);
+  };
+  private readonly _onPlayerDied = (payload: unknown) => {
+    const data = payload as { playerId: string };
+    const tradeId = this.getPlayerTradeId(data.playerId);
+    if (tradeId) {
+      this.cancelTrade(tradeId, "player_died");
+    }
+  };
+
   constructor(world: World) {
     this.world = world;
   }
@@ -100,30 +117,21 @@ export class TradingSystem {
     }, 10_000); // Check every 10 seconds
 
     // Subscribe to player disconnect events to clean up trades
-    this.world.on(EventType.PLAYER_LEFT, (payload: unknown) => {
-      const data = payload as { playerId: string };
-      this.handlePlayerDisconnect(data.playerId);
-    });
-
-    this.world.on(EventType.PLAYER_LOGOUT, (payload: unknown) => {
-      const data = payload as { playerId: string };
-      this.handlePlayerDisconnect(data.playerId);
-    });
-
-    // Subscribe to player death to cancel active trades
-    this.world.on(EventType.PLAYER_DIED, (payload: unknown) => {
-      const data = payload as { playerId: string };
-      const tradeId = this.getPlayerTradeId(data.playerId);
-      if (tradeId) {
-        this.cancelTrade(tradeId, "player_died");
-      }
-    });
+    // Use stored handlers for proper cleanup in destroy()
+    this.world.on(EventType.PLAYER_LEFT, this._onPlayerLeft);
+    this.world.on(EventType.PLAYER_LOGOUT, this._onPlayerLogout);
+    this.world.on(EventType.PLAYER_DIED, this._onPlayerDied);
   }
 
   /**
    * Cleanup when system is destroyed
    */
   destroy(): void {
+    // Remove event listeners to prevent memory leaks
+    this.world.off(EventType.PLAYER_LEFT, this._onPlayerLeft);
+    this.world.off(EventType.PLAYER_LOGOUT, this._onPlayerLogout);
+    this.world.off(EventType.PLAYER_DIED, this._onPlayerDied);
+
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;

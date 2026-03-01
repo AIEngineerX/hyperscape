@@ -62,6 +62,13 @@ export class ClientLiveKit extends System {
     playerId: string;
   }[];
   private prefsBound: boolean = false;
+  // Bound handler for IsSpeakingChanged - stored for proper cleanup
+  private readonly _onIsSpeakingChanged = (speaking: boolean) => {
+    const player = this.world.entities.player as {
+      setSpeaking?: (speaking: boolean) => void;
+    } | null;
+    player?.setSpeaking?.(speaking);
+  };
 
   constructor(world: World) {
     super(world);
@@ -116,12 +123,7 @@ export class ClientLiveKit extends System {
     this.room.on(RoomEvent.TrackUnsubscribed, this.onTrackUnsubscribed);
     this.room.localParticipant.on(
       ParticipantEvent.IsSpeakingChanged,
-      (speaking: boolean) => {
-        const player = this.world.entities.player as {
-          setSpeaking?: (speaking: boolean) => void;
-        } | null;
-        player?.setSpeaking?.(speaking);
-      },
+      this._onIsSpeakingChanged,
     );
     // Get LiveKit URL from server snapshot (wsUrl is included in livekit opts)
     const livekitUrl = wsUrl || "";
@@ -274,6 +276,11 @@ export class ClientLiveKit extends System {
     this.screens = [];
 
     if (this.room) {
+      // Remove localParticipant listener (prevents memory leak)
+      this.room.localParticipant?.off(
+        ParticipantEvent.IsSpeakingChanged,
+        this._onIsSpeakingChanged,
+      );
       // Remove room event listeners
       this.room.off(RoomEvent.TrackMuted, this.onTrackMuted);
       this.room.off(RoomEvent.TrackUnmuted, this.onTrackUnmuted);

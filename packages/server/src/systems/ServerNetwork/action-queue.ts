@@ -389,4 +389,15 @@ export class ActionQueue {
       totalQueuedInteractions,
     };
   }
+
+  /**
+   * Destroy the action queue and clear all state
+   * Called during server shutdown to prevent memory leaks
+   */
+  destroy(): void {
+    this.playerQueues.clear();
+    this.moveHandler = null;
+    this.combatHandler = null;
+    this.interactionHandler = null;
+  }
 }

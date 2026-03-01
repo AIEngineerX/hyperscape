@@ -212,6 +212,29 @@ export class GameTickProcessor {
     position: undefined as { x: number; y: number; z: number } | undefined,
   };
 
+  // Bound event handlers for proper cleanup (prevents memory leak)
+  private readonly _onNpcSpawned = () => {
+    this.npcOrderDirty = true;
+  };
+  private readonly _onNpcDespawned = () => {
+    this.npcOrderDirty = true;
+  };
+  private readonly _onNpcDied = () => {
+    this.npcOrderDirty = true;
+  };
+  private readonly _onNpcRespawned = () => {
+    this.npcOrderDirty = true;
+  };
+  private readonly _onPlayerJoined = () => {
+    this.playerOrderDirty = true;
+  };
+  private readonly _onPlayerLeft = () => {
+    this.playerOrderDirty = true;
+  };
+  private readonly _onPlayerRespawned = () => {
+    this.playerOrderDirty = true;
+  };
+
   constructor(deps: {
     world: World;
     actionQueue: ActionQueue;
@@ -249,32 +272,19 @@ export class GameTickProcessor {
 
   /**
    * Set up event listeners to invalidate processing order cache
+   * Uses stored handlers for proper cleanup in destroy()
    */
   private setupCacheInvalidation(): void {
-    // NPCs
-    this.world.on(EventType.MOB_NPC_SPAWNED, () => {
-      this.npcOrderDirty = true;
-    });
-    this.world.on(EventType.MOB_NPC_DESPAWNED, () => {
-      this.npcOrderDirty = true;
-    });
-    this.world.on(EventType.NPC_DIED, () => {
-      this.npcOrderDirty = true;
-    });
-    this.world.on(EventType.MOB_NPC_RESPAWNED, () => {
-      this.npcOrderDirty = true;
-    });
+    // NPCs - use stored handlers for cleanup
+    this.world.on(EventType.MOB_NPC_SPAWNED, this._onNpcSpawned);
+    this.world.on(EventType.MOB_NPC_DESPAWNED, this._onNpcDespawned);
+    this.world.on(EventType.NPC_DIED, this._onNpcDied);
+    this.world.on(EventType.MOB_NPC_RESPAWNED, this._onNpcRespawned);
 
-    // Players
-    this.world.on(EventType.PLAYER_JOINED, () => {
-      this.playerOrderDirty = true;
-    });
-    this.world.on(EventType.PLAYER_LEFT, () => {
-      this.playerOrderDirty = true;
-    });
-    this.world.on(EventType.PLAYER_RESPAWNED, () => {
-      this.playerOrderDirty = true;
-    });
+    // Players - use stored handlers for cleanup
+    this.world.on(EventType.PLAYER_JOINED, this._onPlayerJoined);
+    this.world.on(EventType.PLAYER_LEFT, this._onPlayerLeft);
+    this.world.on(EventType.PLAYER_RESPAWNED, this._onPlayerRespawned);
   }
 
   /**
@@ -859,6 +869,16 @@ export class GameTickProcessor {
    * Cleanup on shutdown
    */
   destroy(): void {
+    // Remove event listeners to prevent memory leaks
+    this.world.off(EventType.MOB_NPC_SPAWNED, this._onNpcSpawned);
+    this.world.off(EventType.MOB_NPC_DESPAWNED, this._onNpcDespawned);
+    this.world.off(EventType.NPC_DIED, this._onNpcDied);
+    this.world.off(EventType.MOB_NPC_RESPAWNED, this._onNpcRespawned);
+    this.world.off(EventType.PLAYER_JOINED, this._onPlayerJoined);
+    this.world.off(EventType.PLAYER_LEFT, this._onPlayerLeft);
+    this.world.off(EventType.PLAYER_RESPAWNED, this._onPlayerRespawned);
+
+    // Clear queues and processing order
     this.damageQueue = [];
     this.broadcastQueue = [];
     this.npcProcessingOrder = [];

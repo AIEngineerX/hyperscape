@@ -166,7 +166,8 @@ export class EventBridge {
         this.broadcast.sendToAll("resourceSpawned", args[0]);
       });
 
-      this.world.on(
+      // Use tracked this.on() for proper cleanup in destroy()
+      this.on(
         EventType.RESOURCE_SPAWN_POINTS_REGISTERED,
         (...args: unknown[]) => {
           this.broadcast.sendToAll("resourceSpawnPoints", args[0]);
@@ -693,21 +694,18 @@ export class EventBridge {
       });
 
       // Forward projectile launched events to all clients for visual effects (arrows, spells)
-      this.world.on(
-        EventType.COMBAT_PROJECTILE_LAUNCHED,
-        (payload: unknown) => {
-          const data =
-            payload as EventMap[EventType.COMBAT_PROJECTILE_LAUNCHED];
+      // Use tracked this.on() for proper cleanup in destroy()
+      this.on(EventType.COMBAT_PROJECTILE_LAUNCHED, (payload: unknown) => {
+        const data = payload as EventMap[EventType.COMBAT_PROJECTILE_LAUNCHED];
 
-          // Broadcast to nearby clients so they see the projectile
-          this.broadcast.sendToNearby(
-            "projectileLaunched",
-            data,
-            data.sourcePosition.x,
-            data.sourcePosition.z,
-          );
-        },
-      );
+        // Broadcast to nearby clients so they see the projectile
+        this.broadcast.sendToNearby(
+          "projectileLaunched",
+          data,
+          data.sourcePosition.x,
+          data.sourcePosition.z,
+        );
+      });
 
       // Forward combat face target events so clients rotate toward their target
       // Essential for magic/ranged attacks where player is stationary
@@ -885,7 +883,8 @@ export class EventBridge {
 
       // Send bank contents on player spawn so agents know what's in bank
       // without having to physically open it first
-      this.world.on(EventType.PLAYER_SPAWNED, async (payload: unknown) => {
+      // Use tracked this.on() for proper cleanup in destroy()
+      this.on(EventType.PLAYER_SPAWNED, async (payload: unknown) => {
         const data = payload as { playerId?: string };
         if (!data.playerId) return;
 

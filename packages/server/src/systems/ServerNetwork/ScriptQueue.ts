@@ -566,6 +566,15 @@ export class PlayerScriptQueue {
       scriptsByPriority: byPriority,
     };
   }
+
+  /**
+   * Destroy the script queue and clear all state
+   * Called during server shutdown to prevent memory leaks
+   */
+  destroy(): void {
+    this.playerStates.clear();
+    this.handler = null;
+  }
 }
 
 /**
@@ -736,5 +745,14 @@ export class NPCScriptQueue {
       totalNPCs: this.npcStates.size,
       totalScripts,
     };
+  }
+
+  /**
+   * Destroy the script queue and clear all state
+   * Called during server shutdown to prevent memory leaks
+   */
+  destroy(): void {
+    this.npcStates.clear();
+    this.handler = null;
   }
 }

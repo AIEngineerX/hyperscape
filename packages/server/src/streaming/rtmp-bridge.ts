@@ -984,16 +984,31 @@ export class RTMPBridge {
     }
 
     if (this.wss) {
+      // Remove all listeners before closing to prevent memory leaks
+      this.wss.removeAllListeners("listening");
+      this.wss.removeAllListeners("connection");
+      this.wss.removeAllListeners("error");
       this.wss.close();
       this.wss = null;
     }
 
     if (this.spectatorWss) {
+      // Remove all listeners before closing to prevent memory leaks
+      this.spectatorWss.removeAllListeners("listening");
+      this.spectatorWss.removeAllListeners("connection");
+      this.spectatorWss.removeAllListeners("error");
       this.spectatorWss.close();
       this.spectatorWss = null;
     }
+    // Clean up individual spectator WebSocket listeners
     for (const client of this.spectatorClients) {
-      client.close();
+      client.removeAllListeners("close");
+      client.removeAllListeners("error");
+      try {
+        client.close();
+      } catch {
+        // Ignore errors during cleanup
+      }
     }
     this.spectatorClients.clear();
     this.fmp4InitSegment = null;

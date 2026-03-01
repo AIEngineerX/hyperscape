@@ -40,6 +40,8 @@ import { errMsg } from "../shared/errMsg.js";
 import { ArenaService } from "../arena/ArenaService.js";
 import { getStreamingDuelScheduler } from "../systems/StreamingDuelScheduler/index.js";
 import { getDuelMarketMaker } from "../arena/DuelMarketMaker.js";
+import { destroyAllRateLimiters } from "../systems/ServerNetwork/services/SlidingWindowRateLimiter.js";
+import { destroyIdempotencyService } from "../systems/ServerNetwork/services/IdempotencyService.js";
 
 /**
  * Web3 context for chain writer shutdown
@@ -215,6 +217,9 @@ export function registerShutdownHandlers(
 
     // Step 4: Wait for pending database operations
     await waitForDatabaseOperations(context);
+
+    // Step 4.5: Cleanup global singletons with timers (prevents memory leaks)
+    await cleanupGlobalServices();
 
     // Step 5: Destroy world and systems
     await destroyWorld(context);
@@ -493,6 +498,30 @@ async function waitForDatabaseOperations(
       "[Shutdown] Error waiting for pending database operations:",
       err,
     );
+  }
+}
+
+/**
+ * Cleanup global singleton services with cleanup timers
+ *
+ * Destroys rate limiters and idempotency service to prevent memory leaks.
+ * These services use setInterval for cleanup, which must be stopped.
+ *
+ * @private
+ */
+async function cleanupGlobalServices(): Promise<void> {
+  try {
+    console.log("[Shutdown] Cleaning up global services...");
+
+    // Destroy all rate limiters (clears cleanup intervals and player entries)
+    destroyAllRateLimiters();
+    console.log("[Shutdown] ✅ Rate limiters destroyed");
+
+    // Destroy idempotency service (clears cleanup interval and request hashes)
+    destroyIdempotencyService();
+    console.log("[Shutdown] ✅ Idempotency service destroyed");
+  } catch (err) {
+    console.error("[Shutdown] Error cleaning up global services:", err);
   }
 }
 
