@@ -12,9 +12,20 @@ export type GoldPerpsMarket = {
     spec: "0.1.0";
     description: "Created with Anchor";
   };
+  docs: [
+    "Native-SOL Perpetuals Market.",
+    "",
+    "Collateral is deposited as lamports into the VaultState PDA itself",
+    "(no SPL token accounts needed). This mirrors how ETH/BNB are used",
+    "on the EVM chains: the native coin is the margin currency.",
+    "",
+    "Decimal convention: all lamport amounts use 9 decimals (1 SOL = 1_000_000_000 lamports).",
+    "Prices are also stored with 9 implied decimals (same as Solana's native precision).",
+  ];
   instructions: [
     {
       name: "closePosition";
+      docs: ["Close an existing position, settling PnL back in native SOL."];
       discriminator: [123, 134, 81, 0, 49, 68, 98, 98];
       accounts: [
         {
@@ -33,6 +44,7 @@ export type GoldPerpsMarket = {
         },
         {
           name: "vault";
+          docs: ["Vault pays out SOL settlement."];
           writable: true;
           pda: {
             seeds: [
@@ -44,22 +56,18 @@ export type GoldPerpsMarket = {
           };
         },
         {
-          name: "vaultTokenAccount";
-          writable: true;
-        },
-        {
-          name: "ownerTokenAccount";
-          writable: true;
-        },
-        {
-          name: "tokenProgram";
-          address: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+          name: "systemProgram";
+          address: "11111111111111111111111111111111";
         },
       ];
       args: [];
     },
     {
       name: "initializeVault";
+      docs: [
+        "Initialize the global vault.",
+        "skew_scale and funding_velocity control the market's price impact curve.",
+      ];
       discriminator: [48, 191, 163, 44, 71, 129, 63, 164];
       accounts: [
         {
@@ -80,9 +88,6 @@ export type GoldPerpsMarket = {
           signer: true;
         },
         {
-          name: "goldMint";
-        },
-        {
           name: "systemProgram";
           address: "11111111111111111111111111111111";
         },
@@ -100,6 +105,10 @@ export type GoldPerpsMarket = {
     },
     {
       name: "liquidate";
+      docs: [
+        "Liquidate an undercollateralized position.",
+        "Anyone can call this; seized collateral goes to the insurance fund.",
+      ];
       discriminator: [223, 179, 226, 125, 48, 46, 39, 74];
       accounts: [
         {
@@ -113,11 +122,26 @@ export type GoldPerpsMarket = {
         {
           name: "vault";
         },
+        {
+          name: "liquidator";
+          docs: [
+            "Liquidator receives the rent from the closed position account.",
+          ];
+          writable: true;
+          signer: true;
+        },
       ];
       args: [];
     },
     {
       name: "openPosition";
+      docs: [
+        "Open a leveraged long or short position, depositing native SOL as collateral.",
+        "",
+        "position_type: 0 = Long, 1 = Short",
+        "collateral: lamports to deposit (SOL/lamports, 9 decimals)",
+        "leverage: integer multiplier (e.g., 2 = 2x)",
+      ];
       discriminator: [135, 128, 47, 77, 15, 152, 240, 49];
       accounts: [
         {
@@ -146,27 +170,25 @@ export type GoldPerpsMarket = {
           signer: true;
         },
         {
-          name: "traderTokenAccount";
+          name: "vault";
+          docs: ["The vault PDA receives native SOL lamports as collateral."];
           writable: true;
-        },
-        {
-          name: "vaultTokenAccount";
-          writable: true;
+          pda: {
+            seeds: [
+              {
+                kind: "const";
+                value: [118, 97, 117, 108, 116];
+              },
+            ];
+          };
         },
         {
           name: "oracle";
           writable: true;
         },
         {
-          name: "vault";
-        },
-        {
           name: "systemProgram";
           address: "11111111111111111111111111111111";
-        },
-        {
-          name: "tokenProgram";
-          address: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
         },
       ];
       args: [
@@ -190,6 +212,10 @@ export type GoldPerpsMarket = {
     },
     {
       name: "updateOracle";
+      docs: [
+        "Push updated TrueSkill ratings from the Dueling system.",
+        "Called by the keeper bot after each duel resolves.",
+      ];
       discriminator: [112, 41, 209, 18, 248, 226, 252, 188];
       accounts: [
         {
@@ -210,6 +236,9 @@ export type GoldPerpsMarket = {
         },
         {
           name: "vault";
+          docs: [
+            "Vault is needed to read skew_scale / funding_velocity during drift update.",
+          ];
         },
         {
           name: "authority";
@@ -259,12 +288,17 @@ export type GoldPerpsMarket = {
     {
       code: 6000;
       name: "invalidOracle";
-      msg: "Invalid Oracle";
+      msg: "Oracle does not match the requested agent";
     },
     {
       code: 6001;
       name: "notLiquidatable";
-      msg: "Position is not liquidatable";
+      msg: "Position is not undercollateralized; cannot liquidate";
+    },
+    {
+      code: 6002;
+      name: "overflow";
+      msg: "Numeric overflow in size calculation";
     },
   ];
   types: [
@@ -354,15 +388,7 @@ export type GoldPerpsMarket = {
             type: "pubkey";
           },
           {
-            name: "goldMint";
-            type: "pubkey";
-          },
-          {
             name: "insuranceFund";
-            type: "u64";
-          },
-          {
-            name: "liquidityFund";
             type: "u64";
           },
           {

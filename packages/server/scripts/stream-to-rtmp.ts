@@ -54,6 +54,11 @@ import {
   generateWebCodecsCaptureScript,
 } from "../src/streaming/index.js";
 import { errMsg } from "../src/shared/errMsg.ts";
+import { getStreamLeakDiagnostics } from "../src/streaming/stream-leak-diagnostics.js";
+
+// Auto-enable leak diagnostics if STREAM_LEAK_DIAGNOSTICS=true.
+// Installed before any timers are allocated so the counts are accurate.
+getStreamLeakDiagnostics();
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -1085,6 +1090,20 @@ async function main() {
     getRTMPBridge().stop();
     clearExternalStatusSnapshot();
     await cleanup();
+
+    // Final leak report: print and validate that no timers were orphaned.
+    const diag = getStreamLeakDiagnostics();
+    if (diag) {
+      diag.printReport();
+      try {
+        diag.assertNoLeaks("after shutdown");
+        console.log("[StreamLeakDiagnostics] ✅ No timer leaks detected.");
+      } catch (leakErr) {
+        console.error(String(leakErr));
+      }
+      diag.uninstall();
+    }
+
     process.exit(0);
   };
 

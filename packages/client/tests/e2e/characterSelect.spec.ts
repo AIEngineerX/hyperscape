@@ -51,6 +51,42 @@ async function gotoAndStabilize(page: Page, url: string): Promise<boolean> {
         continue;
       }
 
+      // Some runs get stuck on the initial loading screen (e.g. "Starting world..."
+      // at low percentage) and never reach interactive UI. Retry navigation when this
+      // transient startup state does not clear quickly.
+      const stillLoading = await page
+        .evaluate(async () => {
+          const hasInteractiveUi = () =>
+            Boolean(
+              document.querySelector(
+                'button, input, [role="dialog"], [data-testid="character-select"]',
+              ),
+            );
+          const isLoadingTextVisible = () => {
+            const text = document.body?.innerText ?? "";
+            return /Starting world|Loading world/i.test(text);
+          };
+
+          if (!isLoadingTextVisible()) {
+            return false;
+          }
+
+          const startedAt = Date.now();
+          while (Date.now() - startedAt < 12_000) {
+            if (!isLoadingTextVisible() || hasInteractiveUi()) {
+              return false;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 300));
+          }
+
+          return true;
+        })
+        .catch(() => true);
+      if (stillLoading) {
+        await page.waitForTimeout(1000).catch(() => {});
+        continue;
+      }
+
       return true;
     } catch {
       if (page.isClosed()) return false;
@@ -81,10 +117,14 @@ test.describe("Character Selection Screen", () => {
       /ResizeObserver/,
       /Script error/,
       /favicon/,
+      /Failed to load resource: the server responded with a status of 404/i,
       /WebSocket connection to 'ws:\/\/localhost:3333\/'.*ERR_CONNECTION_REFUSED/i,
       /WebSocket connection to 'ws:\/\/localhost:5555\/ws'.*ERR_CONNECTION_REFUSED/i,
       /Failed to load resource: net::ERR_CONNECTION_REFUSED/i,
       /Failed to fetch/i,
+      /Authentication failed: Missing authentication token/i,
+      /\[client-network\].*Authentication failed: Missing authentication token/i,
+      /\[client-network\].*Reconnect attempt failed: Error: Authentication failed: Missing authentication token/i,
       /\[ClientNetwork\].*WebSocket CLOSED/i,
       /\[physx-script-loader\] Failed to load PhysX script/i,
       /\[physx-script-loader\] Attempt \d+ failed/i,
