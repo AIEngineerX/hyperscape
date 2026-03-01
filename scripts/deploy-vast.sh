@@ -223,6 +223,17 @@ mkdir -p /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix
 echo "[deploy] X cleanup complete"
 
+# Set up XDG_RUNTIME_DIR - required for Wayland/Vulkan/EGL
+# Must be a directory owned by the current user
+mkdir -p /tmp/runtime-root
+chmod 0700 /tmp/runtime-root
+export XDG_RUNTIME_DIR=/tmp/runtime-root
+echo "[deploy] XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+
+# Set up Vulkan ICD for NVIDIA
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+echo "[deploy] VK_ICD_FILENAMES=$VK_ICD_FILENAMES"
+
 # Try Xorg if DRI devices exist
 if [ -d "/dev/dri" ] && [ -e "/dev/dri/card0" -o -e "/dev/dri/card1" ]; then
     echo "[deploy] DRI devices found, attempting Xorg setup..."
