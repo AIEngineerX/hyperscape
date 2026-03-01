@@ -660,6 +660,11 @@ import { chromium } from 'playwright';
 // NON-HEADLESS Chrome with Xvfb - this is required for WebGPU!
 // WebGPU requires a real window context, not headless mode
 // Xvfb provides the X11 display, Chrome uses GPU via Vulkan
+// Try SwiftShader (software Vulkan) as fallback if hardware Vulkan fails
+// This ensures WebGPU is available even without hardware GPU access
+const useSwiftShader = process.env.WEBGPU_USE_SWIFTSHADER === 'true';
+console.log('DEBUG: Using SwiftShader:', useSwiftShader);
+
 const args = [
   '--no-sandbox',
   '--disable-gpu-sandbox',  // CRITICAL for container GPU access
@@ -669,16 +674,24 @@ const args = [
   // Chrome connects to Xvfb on DISPLAY=:99
   // GPU initialization flags
   '--use-gl=angle',
-  '--use-angle=vulkan',
-  // WebGPU essentials
+  useSwiftShader ? '--use-angle=swiftshader' : '--use-angle=vulkan',
+  // WebGPU essentials - use separate enable-features to avoid parsing issues
   '--enable-unsafe-webgpu',
-  '--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan,WebGPU',
-  '--enable-dawn-backends=vulkan',  // Explicitly enable Dawn Vulkan backend
-  '--enable-dawn-features=allow_unsafe_apis',
+  '--enable-features=Vulkan',
+  '--enable-features=WebGPU',
+  '--enable-features=VulkanFromANGLE',
+  '--enable-features=DefaultANGLEVulkan',
+  // Dawn backend configuration
+  '--enable-dawn-backends=vulkan',
+  '--enable-dawn-features=allow_unsafe_apis,disable_blob_cache',
+  // Prevent GPU crashes from disabling features
+  '--disable-gpu-process-crash-limit',
   '--ignore-gpu-blocklist',
   // Enable GPU
   '--enable-gpu',
-  '--disable-software-rasterizer',
+  '--enable-webgpu-developer-features',
+  // Don't disable software rendering if hardware fails
+  // '--disable-software-rasterizer',
   // Disable GPU sandbox for container
   '--disable-gpu-sandbox',
 ];
@@ -858,7 +871,7 @@ PLAYWRIGHTEOF
     export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
     # Use bun instead of node since playwright is installed via bunx
     # Capture full output to see DEBUG info
-    echo "[deploy] Running Playwright WebGPU test..."
+    echo "[deploy] Running Playwright WebGPU test (hardware Vulkan)..."
     timeout 60 bun run /tmp/playwright-webgpu-test.mjs 2>&1 | tee /tmp/webgpu-test-output.log
     # Extract result from the captured output
     WEBGPU_TEST_RESULT=$(grep -o 'WEBGPU_RESULT: .*' /tmp/webgpu-test-output.log | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
@@ -866,6 +879,21 @@ PLAYWRIGHTEOF
     if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
         WEBGPU_WORKING="playwright-xvfb"
         echo "[deploy] ✓ WebGPU works with Playwright non-headless + Xvfb"
+    fi
+
+    # Test 7: Try SwiftShader (software Vulkan) as fallback
+    if [ "$WEBGPU_WORKING" = "false" ]; then
+        echo "[deploy] Test 7: Trying SwiftShader (software Vulkan) fallback..."
+        export WEBGPU_USE_SWIFTSHADER=true
+        timeout 60 bun run /tmp/playwright-webgpu-test.mjs 2>&1 | tee /tmp/webgpu-test-swiftshader.log
+        WEBGPU_TEST_RESULT=$(grep -o 'WEBGPU_RESULT: .*' /tmp/webgpu-test-swiftshader.log | head -1 || echo "WEBGPU_RESULT: TIMEOUT")
+        echo "[deploy] Test 7 Result: $WEBGPU_TEST_RESULT"
+        if echo "$WEBGPU_TEST_RESULT" | grep -q "SUCCESS"; then
+            WEBGPU_WORKING="swiftshader"
+            echo "[deploy] ✓ WebGPU works with SwiftShader (software) - performance will be limited"
+            export STREAM_CAPTURE_ANGLE="swiftshader"
+        fi
+        unset WEBGPU_USE_SWIFTSHADER
     fi
 fi
 
