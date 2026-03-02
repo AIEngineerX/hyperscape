@@ -63,16 +63,20 @@ cd ../..
 # ── Tear down existing processes ──────────────────────────────
 echo "[deploy] Tearing down existing processes..."
 # Stop pm2-managed processes first
-bunx pm2 delete ecosystem.config.cjs 2>/dev/null || true
-# Also clean up any legacy processes from the old watchdog
+bunx pm2 kill 2>/dev/null || true
+bunx pm2 delete all 2>/dev/null || true
+# Kill ALL bun/node processes to release database connections
+pkill -9 -f "bun" || true
+pkill -9 -f "node" || true
 pkill -f "watchdog.sh" || true
-pkill -f "bun.*build/index" || true
-pkill -f "bun.*dev.mjs" || true
-pkill -f "bun.*dev-final" || true
 pkill -f "stream-to-rtmp" || true
 pkill -f "turbo.*dev" || true
-pkill -f "bun.*duel-stack" || true
-sleep 3
+pkill -f "chromium" || true
+pkill -f "chrome" || true
+
+# Wait for database connections to be released by Neon pooler
+echo "[deploy] Waiting 30s for database connections to clear..."
+sleep 30
 
 # ── Start socat port proxies ─────────────────────────────────
 echo "[deploy] Starting port proxies..."
