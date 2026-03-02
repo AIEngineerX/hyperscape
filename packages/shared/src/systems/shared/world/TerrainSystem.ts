@@ -1934,10 +1934,20 @@ export class TerrainSystem extends System {
     const players = this.world.getPlayers() || [];
     const centers: Array<{ id: string; position: THREE.Vector3 }> = [];
     for (const player of players) {
-      if (!player?.node?.position) continue;
+      // Support both node.position (client) and direct position property (server)
+      const pos = player?.node?.position ?? player?.position;
+      if (!pos) {
+        // MEMORY DEBUG: Log players without position
+        if (Math.random() < 0.01) {
+          console.warn(
+            `[TerrainSystem] Player ${player?.id} missing position (node: ${!!player?.node}, position: ${!!player?.position})`,
+          );
+        }
+        continue;
+      }
       centers.push({
         id: player.id || "player",
-        position: player.node.position,
+        position: pos,
       });
     }
     return centers;
@@ -6582,6 +6592,7 @@ export class TerrainSystem extends System {
 
     // Remove tiles that are no longer needed, with hysteresis padding
     // Approximate each player's center from their core chunk set
+    let unloadedCount = 0;
     for (const [tileKey, tile] of this.terrainTiles) {
       if (!neededTiles.has(tileKey)) {
         let minChebyshev = Infinity;
@@ -6591,17 +6602,21 @@ export class TerrainSystem extends System {
         }
         if (minChebyshev > this.terrainOnlyChunkRange + this.unloadPadding) {
           this.unloadTile(tile);
+          unloadedCount++;
         }
       }
     }
 
-    // Log simulation status every 10 updates
+    // Log simulation status every 10 updates (~10 seconds)
     if (Math.random() < 0.1) {
       const _totalPlayers = centers.length;
       const _simulatedChunkCount = this.simulatedChunks.size;
       const _loadedChunkCount = this.terrainTiles.size;
 
-      // Simulation status tracked for debugging
+      // MEMORY DEBUG: Log terrain tile stats
+      console.log(
+        `[TerrainSystem] Tiles: ${_loadedChunkCount} loaded, ${unloadedCount} unloaded this cycle | Players: ${_totalPlayers} | PlayerCenters: ${playerCenters.length} | Needed: ${neededTiles.size}`,
+      );
 
       // Log shared world status
       const sharedChunks = Array.from(this.chunkPlayerCounts.entries())

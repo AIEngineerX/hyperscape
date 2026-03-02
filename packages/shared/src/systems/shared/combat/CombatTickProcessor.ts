@@ -86,6 +86,38 @@ export interface CombatTickContext extends CombatAttackContext {
 }
 
 export class CombatTickProcessor {
+  // Pre-allocated event payloads (zero allocation in hot path)
+  private readonly _followTargetPayload = {
+    playerId: "",
+    targetId: "",
+    targetPosition: { x: 0, y: 0, z: 0 },
+    attackRange: 1 as number | undefined,
+    attackType: "melee" as string | undefined,
+  };
+
+  private readonly _damageDealtPayload = {
+    attackerId: "",
+    targetId: "",
+    damage: 0,
+    targetType: "mob" as "player" | "mob" | undefined,
+    position: { x: 0, y: 0, z: 0 } as
+      | { x: number; y: number; z: number }
+      | undefined,
+  };
+  private readonly _damageDealtPositionBuffer = { x: 0, y: 0, z: 0 };
+
+  private readonly _projectileHitPayload = {
+    attackerId: "",
+    targetId: "",
+    damage: 0,
+    projectileType: "",
+    position: null as { x: number; y: number; z: number } | null,
+  };
+
+  private readonly _clearFaceTargetPayload = {
+    playerId: "",
+  };
+
   constructor(private readonly ctx: CombatTickContext) {}
 
   /**
@@ -305,13 +337,17 @@ export class CombatTickProcessor {
     }
 
     if (!inRange || targetMoved) {
-      this.ctx.emitTypedEvent(EventType.COMBAT_FOLLOW_TARGET, {
-        playerId: attackerId,
-        targetId,
-        targetPosition: { x: targetPos.x, y: targetPos.y, z: targetPos.z },
-        attackRange: combatRangeTiles,
-        attackType,
-      });
+      this._followTargetPayload.playerId = attackerId;
+      this._followTargetPayload.targetId = targetId;
+      this._followTargetPayload.targetPosition.x = targetPos.x;
+      this._followTargetPayload.targetPosition.y = targetPos.y;
+      this._followTargetPayload.targetPosition.z = targetPos.z;
+      this._followTargetPayload.attackRange = combatRangeTiles;
+      this._followTargetPayload.attackType = attackType;
+      this.ctx.emitTypedEvent(
+        EventType.COMBAT_FOLLOW_TARGET,
+        this._followTargetPayload,
+      );
     }
   }
 
@@ -338,25 +374,37 @@ export class CombatTickProcessor {
         projectile.attackerId,
       );
 
+      // Emit damage event using pre-allocated payload (zero allocation)
       const targetPosition = getEntityPosition(target);
-      const snappedPos = targetPosition
-        ? { x: targetPosition.x, y: targetPosition.y, z: targetPosition.z }
-        : undefined;
-      this.ctx.emitTypedEvent(EventType.COMBAT_DAMAGE_DEALT, {
-        attackerId: projectile.attackerId,
-        targetId: projectile.targetId,
-        damage,
-        targetType,
-        position: snappedPos,
-      });
+      this._damageDealtPayload.attackerId = projectile.attackerId;
+      this._damageDealtPayload.targetId = projectile.targetId;
+      this._damageDealtPayload.damage = damage;
+      this._damageDealtPayload.targetType = targetType;
+      if (targetPosition) {
+        this._damageDealtPositionBuffer.x = targetPosition.x;
+        this._damageDealtPositionBuffer.y = targetPosition.y;
+        this._damageDealtPositionBuffer.z = targetPosition.z;
+        this._damageDealtPayload.position = this._damageDealtPositionBuffer;
+      } else {
+        this._damageDealtPayload.position = undefined;
+      }
+      this.ctx.emitTypedEvent(
+        EventType.COMBAT_DAMAGE_DEALT,
+        this._damageDealtPayload,
+      );
 
-      this.ctx.emitTypedEvent(EventType.COMBAT_PROJECTILE_HIT, {
-        attackerId: projectile.attackerId,
-        targetId: projectile.targetId,
-        damage,
-        projectileType: projectile.spellId ? "spell" : "arrow",
-        position: targetPosition,
-      });
+      // Emit projectile hit using pre-allocated payload
+      this._projectileHitPayload.attackerId = projectile.attackerId;
+      this._projectileHitPayload.targetId = projectile.targetId;
+      this._projectileHitPayload.damage = damage;
+      this._projectileHitPayload.projectileType = projectile.spellId
+        ? "spell"
+        : "arrow";
+      this._projectileHitPayload.position = targetPosition;
+      this.ctx.emitTypedEvent(
+        EventType.COMBAT_PROJECTILE_HIT,
+        this._projectileHitPayload,
+      );
 
       // OSRS arrow recovery: 80% drop to ground, 20% destroyed
       if (projectile.arrowId && this.ctx.groundItemSystem) {
@@ -573,16 +621,24 @@ export class CombatTickProcessor {
 
     this.ctx.applyDamage(targetId, combatState.targetType, damage, attackerId);
 
+    // Emit damage event using pre-allocated payload (zero allocation)
     const targetPosition = getEntityPosition(target);
-    this.ctx.emitTypedEvent(EventType.COMBAT_DAMAGE_DEALT, {
-      attackerId,
-      targetId,
-      damage,
-      targetType: combatState.targetType,
-      position: targetPosition
-        ? { x: targetPosition.x, y: targetPosition.y, z: targetPosition.z }
-        : undefined,
-    });
+    this._damageDealtPayload.attackerId = attackerId;
+    this._damageDealtPayload.targetId = targetId;
+    this._damageDealtPayload.damage = damage;
+    this._damageDealtPayload.targetType = combatState.targetType;
+    if (targetPosition) {
+      this._damageDealtPositionBuffer.x = targetPosition.x;
+      this._damageDealtPositionBuffer.y = targetPosition.y;
+      this._damageDealtPositionBuffer.z = targetPosition.z;
+      this._damageDealtPayload.position = this._damageDealtPositionBuffer;
+    } else {
+      this._damageDealtPayload.position = undefined;
+    }
+    this.ctx.emitTypedEvent(
+      EventType.COMBAT_DAMAGE_DEALT,
+      this._damageDealtPayload,
+    );
 
     this.ctx.recordCombatEvent(GameEventType.COMBAT_ATTACK, attackerId, {
       targetId,
@@ -682,9 +738,11 @@ export class CombatTickProcessor {
       attackerType,
     );
 
-    this.ctx.emitTypedEvent(EventType.COMBAT_CLEAR_FACE_TARGET, {
-      playerId: targetId,
-    });
+    this._clearFaceTargetPayload.playerId = targetId;
+    this.ctx.emitTypedEvent(
+      EventType.COMBAT_CLEAR_FACE_TARGET,
+      this._clearFaceTargetPayload,
+    );
   }
 
   private emitCombatEvents(

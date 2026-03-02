@@ -293,20 +293,7 @@ export class AgentBehaviorTicker {
 
     // === PICK ACTION ===
     const action = this.pickBehaviorAction(instance, gameState);
-
-    const logParts = [
-      `[AgentManager] ${instance.config.name} tick: action=${action.type}`,
-    ];
-    if ("targetId" in action) logParts.push(`target=${action.targetId}`);
-    if ("target" in action) {
-      const t = (action as { target: number[] }).target;
-      logParts.push(`pos=[${t.map((n: number) => n.toFixed(0)).join(",")}]`);
-    }
-    if (instance.goal)
-      logParts.push(
-        `goal=${instance.goal.type}${instance.goal.questName ? `:${instance.goal.questName}` : ""}`,
-      );
-    console.log(logParts.join(" "));
+    // PERF: Removed per-tick logging - this creates strings every 33ms per agent
 
     switch (action.type) {
       case "attack":

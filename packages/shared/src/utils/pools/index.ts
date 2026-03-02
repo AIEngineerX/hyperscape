@@ -13,3 +13,25 @@ export {
   type EntityPoolConfig,
   type PoolStats,
 } from "./EntityPool";
+export { positionPool, type PooledPosition } from "./PositionPool";
+export {
+  createEventPayloadPool,
+  eventPayloadPoolRegistry,
+  type EventPayloadPool,
+  type EventPayloadPoolStats,
+  type EventPayloadPoolConfig,
+  type PooledPayload,
+} from "./EventPayloadPool";
+export {
+  CombatEventPools,
+  type PooledCombatDamageDealtPayload,
+  type PooledCombatProjectileLaunchedPayload,
+  type PooledCombatFaceTargetPayload,
+  type PooledCombatClearFaceTargetPayload,
+  type PooledCombatAttackFailedPayload,
+  type PooledCombatFollowTargetPayload,
+  type PooledCombatStartedPayload,
+  type PooledCombatEndedPayload,
+  type PooledCombatProjectileHitPayload,
+  type PooledCombatKillPayload,
+} from "./CombatEventPools";
