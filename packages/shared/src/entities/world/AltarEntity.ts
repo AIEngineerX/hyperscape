@@ -289,15 +289,11 @@ export class AltarEntity extends InteractableEntity {
     });
   }
 
-  /**
-   * Network data override
-   */
+  // PERF: Mutates buffer in-place instead of creating new objects
   getNetworkData(): Record<string, unknown> {
-    const baseData = super.getNetworkData();
-    return {
-      ...baseData,
-      altarId: this.altarId,
-    };
+    const buf = super.getNetworkData();
+    buf.altarId = this.altarId;
+    return buf;
   }
 
   protected clientUpdate(deltaTime: number): void {

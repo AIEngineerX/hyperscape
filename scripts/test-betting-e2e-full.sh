@@ -36,11 +36,14 @@ RUN_EVM_DEPLOY="${RUN_EVM_DEPLOY:-true}"
 RUN_DEEP_PASS="${RUN_DEEP_PASS:-true}"
 RUN_APP_E2E="${RUN_APP_E2E:-true}"
 RUN_DUEL_STACK="${RUN_DUEL_STACK:-true}"
+E2E_EVM_PORT="${BETTING_FULL_E2E_EVM_PORT:-18545}"
 
 ANVIL_PID=""
 MANAGED_ANVIL="false"
 DUEL_PID=""
 STEP_INDEX=0
+EVM_SIM_REPORT="$PROJECT_DIR/packages/evm-contracts/simulations/evm-localnet-pnl.json"
+SOLANA_SIM_REPORT="$PROJECT_DIR/packages/gold-betting-demo/anchor/simulations/solana-localnet-pnl.json"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -112,6 +115,45 @@ free_solana_test_ports() {
   done
 }
 
+free_anchor_test_processes() {
+  # Interrupted runs can leave Anchor/mocha workers alive and reconnecting.
+  pkill -f "anchor test" >/dev/null 2>&1 || true
+  pkill -f "ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts" >/dev/null 2>&1 || true
+  pkill -f "mocha/bin/mocha.js" >/dev/null 2>&1 || true
+}
+
+free_duel_stack_processes() {
+  # Ensure duel stack startup doesn't race stale listeners from prior runs.
+  pkill -f "scripts/duel-stack.mjs" >/dev/null 2>&1 || true
+  pkill -f "scripts/dev-duel.mjs" >/dev/null 2>&1 || true
+  pkill -f "packages/server start" >/dev/null 2>&1 || true
+  pkill -f "packages/client dev" >/dev/null 2>&1 || true
+  pkill -f "keeper:bot:devnet" >/dev/null 2>&1 || true
+  pkill -f "scripts/stream-to-rtmp.ts" >/dev/null 2>&1 || true
+  rm -f "$PROJECT_DIR/.runtime-locks/duel-stack.json" >/dev/null 2>&1 || true
+  rm -f "$PROJECT_DIR/.runtime-locks/dev-duel.json" >/dev/null 2>&1 || true
+
+  for port in 3333 4179 5555 8765; do
+    local pids
+    pids="$(lsof -tiTCP:${port} -sTCP:LISTEN || true)"
+    if [[ -z "$pids" ]]; then
+      continue
+    fi
+    warn "Terminating stale duel listener(s) on :${port}: ${pids}"
+    for pid in $pids; do
+      kill "$pid" >/dev/null 2>&1 || true
+    done
+    sleep 1
+    local stubborn
+    stubborn="$(lsof -tiTCP:${port} -sTCP:LISTEN || true)"
+    if [[ -n "$stubborn" ]]; then
+      for pid in $stubborn; do
+        kill -9 "$pid" >/dev/null 2>&1 || true
+      done
+    fi
+  done
+}
+
 run_step() {
   local step_name="$1"
   shift
@@ -124,10 +166,15 @@ run_step() {
 
   info "STEP ${STEP_INDEX}: ${step_name}"
   info "log: ${logfile}"
+  local step_status=0
   (
-    set -o pipefail
+    set -euo pipefail
     "$@" 2>&1 | tee "$logfile"
-  )
+  ) || step_status=$?
+
+  if [[ "$step_status" -ne 0 ]]; then
+    fail "STEP ${STEP_INDEX} failed (${step_name}) [exit=${step_status}] — see ${logfile}"
+  fi
 }
 
 start_managed_anvil_if_needed() {
@@ -172,6 +219,8 @@ stop_duel_stack() {
 
 cleanup() {
   stop_duel_stack
+  free_duel_stack_processes
+  free_anchor_test_processes
   free_solana_test_ports
 
   if [[ "$MANAGED_ANVIL" = "true" ]] && [[ -n "$ANVIL_PID" ]] && kill -0 "$ANVIL_PID" >/dev/null 2>&1; then
@@ -299,25 +348,31 @@ if [[ "$RUN_DEEP_PASS" = "true" ]]; then
       node ./node_modules/hardhat/internal/cli/bootstrap.js test
   "
 
+  free_anchor_test_processes
   free_solana_test_ports
   run_step "solana-contract-tests-anchor" bash -lc "
     set -euo pipefail
     cd '$PROJECT_DIR/packages/gold-betting-demo/anchor'
     bun run test
   "
+  free_anchor_test_processes
   free_solana_test_ports
 
   run_step "evm-100-wallet-simulation" bash -lc "
     set -euo pipefail
+    rm -f '$EVM_SIM_REPORT'
     cd '$PROJECT_DIR/packages/evm-contracts'
     node ./node_modules/hardhat/internal/cli/bootstrap.js run scripts/simulate-localnet.ts
+    test -s '$EVM_SIM_REPORT'
   "
 
   free_solana_test_ports
   run_step "solana-100-wallet-simulation" bash -lc "
     set -euo pipefail
+    rm -f '$SOLANA_SIM_REPORT'
     cd '$PROJECT_DIR/packages/gold-betting-demo/anchor'
     bun run simulate:localnet
+    test -s '$SOLANA_SIM_REPORT'
   "
   free_solana_test_ports
 
@@ -334,6 +389,7 @@ if [[ "$RUN_APP_E2E" = "true" ]]; then
   run_step "betting-app-e2e-local" bash -lc "
     set -euo pipefail
     cd '$PROJECT_DIR/packages/gold-betting-demo/app'
+    export E2E_EVM_PORT='$E2E_EVM_PORT'
     bun run test:e2e:local
   "
 else
@@ -341,10 +397,11 @@ else
 fi
 
 if [[ "$RUN_DUEL_STACK" = "true" ]]; then
+  free_duel_stack_processes
   info "Starting duel stack in background for live verification"
   (
     cd "$PROJECT_DIR"
-    bun run duel --fresh --with-mm
+    DUEL_BOT_SQL_ENABLED=true bun run duel --fresh --with-mm --bots=2
   ) >"${LOG_DIR}/duel-stack.log" 2>&1 &
   DUEL_PID="$!"
   info "duel stack pid: ${DUEL_PID}"

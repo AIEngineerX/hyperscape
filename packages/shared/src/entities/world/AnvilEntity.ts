@@ -329,16 +329,12 @@ export class AnvilEntity extends InteractableEntity {
     return actions;
   }
 
-  /**
-   * Network data for syncing to clients.
-   */
+  // PERF: Mutates buffer in-place instead of creating new objects
   getNetworkData(): Record<string, unknown> {
-    const baseData = super.getNetworkData();
-    return {
-      ...baseData,
-      displayName: this.displayName,
-      isPermanent: this.isPermanent,
-    };
+    const buf = super.getNetworkData();
+    buf.displayName = this.displayName;
+    buf.isPermanent = this.isPermanent;
+    return buf;
   }
 
   /**

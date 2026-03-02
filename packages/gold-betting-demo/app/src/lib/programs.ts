@@ -26,6 +26,11 @@ function resolveProgramId(idlJson: unknown, fallback: string): PublicKey {
   return new PublicKey(address);
 }
 
+const ENV_FIGHT_ORACLE_PROGRAM_ID =
+  import.meta.env.VITE_FIGHT_ORACLE_PROGRAM_ID?.trim();
+const ENV_GOLD_CLOB_MARKET_PROGRAM_ID =
+  import.meta.env.VITE_GOLD_CLOB_MARKET_PROGRAM_ID?.trim();
+
 function ensureIdlAddress(idlJson: unknown, programId: PublicKey): Idl {
   const idlWithMaybeAddress = idlJson as Idl & { address?: string };
   return {
@@ -39,14 +44,18 @@ function ensureIdlAddress(idlJson: unknown, programId: PublicKey): Idl {
   } as Idl;
 }
 
-export const FIGHT_ORACLE_PROGRAM_ID = resolveProgramId(
-  fightOracleIdl,
-  "A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS",
-);
-export const GOLD_CLOB_MARKET_PROGRAM_ID = resolveProgramId(
-  goldClobMarketIdl,
-  "4phSkAVkbtGbQbrT3p2xjNPLAyw1DWz99wT7g4dQMyiX",
-);
+export const FIGHT_ORACLE_PROGRAM_ID = ENV_FIGHT_ORACLE_PROGRAM_ID
+  ? new PublicKey(ENV_FIGHT_ORACLE_PROGRAM_ID)
+  : resolveProgramId(
+      fightOracleIdl,
+      "A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS",
+    );
+export const GOLD_CLOB_MARKET_PROGRAM_ID = ENV_GOLD_CLOB_MARKET_PROGRAM_ID
+  ? new PublicKey(ENV_GOLD_CLOB_MARKET_PROGRAM_ID)
+  : resolveProgramId(
+      goldClobMarketIdl,
+      "4phSkAVkbtGbQbrT3p2xjNPLAyw1DWz99wT7g4dQMyiX",
+    );
 
 /**
  * @deprecated Binary market is no longer deployed. Retained for backward

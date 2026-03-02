@@ -324,17 +324,16 @@ export class HeadstoneEntity extends InteractableEntity {
 
   // --- Network ---
 
+  // PERF: Mutates buffer in-place instead of creating new objects
   getNetworkData(): Record<string, unknown> {
-    const baseData = super.getNetworkData();
+    const buf = super.getNetworkData();
     const hd = this.headstoneData;
-    return {
-      ...baseData,
-      lootItemCount: this.lootItems.length,
-      despawnTime: hd.despawnTime,
-      playerId: hd.playerId,
-      deathMessage: hd.deathMessage,
-      lootProtectionUntil: this.lootProtectionUntil,
-    };
+    buf.lootItemCount = this.lootItems.length;
+    buf.despawnTime = hd.despawnTime;
+    buf.playerId = hd.playerId;
+    buf.deathMessage = hd.deathMessage;
+    buf.lootProtectionUntil = this.lootProtectionUntil;
+    return buf;
   }
 
   serialize(): EntityData {

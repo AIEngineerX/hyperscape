@@ -463,22 +463,20 @@ export class ItemEntity extends InteractableEntity {
     );
   }
 
-  // Network data override
+  // PERF: Mutates buffer in-place instead of creating new objects
   getNetworkData(): Record<string, unknown> {
-    const baseData = super.getNetworkData();
-    return {
-      ...baseData,
-      model: this.config.model,
-      modelPath: this.config.modelPath,
-      itemId: this.config.itemId,
-      itemType: this.config.itemType,
-      quantity: this.config.quantity,
-      value: this.config.value,
-      rarity: this.config.rarity,
-      stackable: this.config.stackable,
-      modelScale: this.config.modelScale,
-      groundOffset: this.config.groundOffset,
-    };
+    const buf = super.getNetworkData();
+    buf.model = this.config.model;
+    buf.modelPath = this.config.modelPath;
+    buf.itemId = this.config.itemId;
+    buf.itemType = this.config.itemType;
+    buf.quantity = this.config.quantity;
+    buf.value = this.config.value;
+    buf.rarity = this.config.rarity;
+    buf.stackable = this.config.stackable;
+    buf.modelScale = this.config.modelScale;
+    buf.groundOffset = this.config.groundOffset;
+    return buf;
   }
 
   // Override serialize to include model data for network sync

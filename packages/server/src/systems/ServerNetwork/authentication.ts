@@ -275,19 +275,22 @@ export async function authenticateUser(
           .where("id", jwtPayload.userId as string)
           .first();
 
-        // If user doesn't exist and this is a Privy ID, create the user record
-        if (
-          !dbResult &&
-          (jwtPayload.userId as string).startsWith("did:privy:")
-        ) {
+        // If user doesn't exist for a valid server-signed JWT userId, create
+        // a minimal user record so accountId remains stable across reconnects.
+        if (!dbResult) {
           const timestamp = new Date().toISOString();
+          const jwtUserId = jwtPayload.userId as string;
           const newUser = {
-            id: jwtPayload.userId as string,
-            name: name || "Agent",
+            id: jwtUserId,
+            name:
+              name ||
+              (jwtUserId.startsWith("did:privy:") ? "Adventurer" : "Agent"),
             avatar: avatar || null,
             roles: "",
             createdAt: timestamp,
-            privyUserId: jwtPayload.userId as string,
+            privyUserId: jwtUserId.startsWith("did:privy:")
+              ? jwtUserId
+              : undefined,
           };
 
           try {

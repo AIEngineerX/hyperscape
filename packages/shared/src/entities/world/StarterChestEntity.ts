@@ -336,15 +336,11 @@ export class StarterChestEntity extends InteractableEntity {
     console.log(`[StarterChest] Player ${playerId} looted starter chest`);
   }
 
-  /**
-   * Network data
-   */
+  // PERF: Mutates buffer in-place instead of creating new objects
   getNetworkData(): Record<string, unknown> {
-    const baseData = super.getNetworkData();
-    return {
-      ...baseData,
-      chestType: "starter",
-    };
+    const buf = super.getNetworkData();
+    buf.chestType = "starter";
+    return buf;
   }
 
   protected clientUpdate(deltaTime: number): void {

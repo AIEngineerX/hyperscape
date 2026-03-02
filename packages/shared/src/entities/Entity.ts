@@ -280,6 +280,21 @@ export class Entity implements IEntity {
 
   private _loggedNoCamera: boolean = false; // Track if we've logged "no camera" warning
 
+  // PERF: Pre-allocated buffer for network delta data (avoids allocations in hot path)
+  // WARNING: This buffer is reused each call - caller must serialize before next call
+  private readonly _networkDeltaBuffer: Record<string, unknown> = {};
+
+  // PERF: Pre-allocated buffers for getNetworkData hot path
+  // These avoid creating new objects on every network sync
+  protected readonly _networkDataBuffer: Record<string, unknown> = {};
+  protected readonly _networkPositionBuffer: {
+    x: number;
+    y: number;
+    z: number;
+  } = { x: 0, y: 0, z: 0 };
+  protected readonly _networkScaleBuffer: { x: number; y: number; z: number } =
+    { x: 1, y: 1, z: 1 };
+
   protected health: number = 0;
   protected maxHealth: number = 100;
   protected level: number = 1;
@@ -2813,19 +2828,37 @@ export class Entity implements IEntity {
 
   // Get data for network synchronization
   getNetworkData(): Record<string, unknown> {
-    const position = toPosition3D(this.node.position);
-    const rotation = this.node.quaternion;
-    const scale = {
-      x: this.node.scale.x,
-      y: this.node.scale.y,
-      z: this.node.scale.z,
-    };
+    // PERF: Use pre-allocated buffers to avoid object creation in hot path
+    const buf = this._networkDataBuffer;
+    const pos = this._networkPositionBuffer;
+    const scale = this._networkScaleBuffer;
 
-    // Include all data fields (e.g., emote 'e') for network sync
-    // Filter out position/quaternion/scale since EntityManager handles those separately as p/q
-    const dataFields: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(this.data)) {
-      // Skip position/quaternion/scale arrays - EntityManager sends them as p/q
+    // Clear previous data
+    for (const key in buf) delete buf[key];
+
+    // Populate position buffer (avoids toPosition3D allocation)
+    pos.x = this.node.position.x;
+    pos.y = this.node.position.y;
+    pos.z = this.node.position.z;
+
+    // Populate scale buffer
+    scale.x = this.node.scale.x;
+    scale.y = this.node.scale.y;
+    scale.z = this.node.scale.z;
+
+    // Set base properties
+    buf.id = this.id;
+    buf.type = this.type;
+    buf.name = this.name;
+    buf.position = pos;
+    buf.rotation = this.node.quaternion;
+    buf.scale = scale;
+    buf.visible = this.node.visible;
+    buf.networkVersion = this.networkVersion;
+    buf.properties = this.config.properties || {};
+
+    // Copy data fields directly (avoid Object.entries allocation)
+    for (const key in this.data) {
       if (
         key !== "position" &&
         key !== "quaternion" &&
@@ -2834,22 +2867,90 @@ export class Entity implements IEntity {
         key !== "type" &&
         key !== "name"
       ) {
-        dataFields[key] = value;
+        buf[key] = this.data[key];
       }
     }
 
-    return {
-      id: this.id,
-      type: this.type,
-      name: this.name,
-      position,
-      rotation,
-      scale,
-      visible: this.node.visible,
-      networkVersion: this.networkVersion,
-      properties: this.config.properties || {},
-      ...dataFields, // Include emote ('e'), inCombat, combatTarget, health, and other data fields
-    };
+    return buf;
+  }
+
+  /**
+   * Populate network data into a provided buffer (zero allocation version).
+   * Subclasses should override this to add their custom fields.
+   * The buffer is NOT cleared - caller is responsible for clearing if needed.
+   *
+   * @param buf - The buffer to populate with network data
+   */
+  populateNetworkData(buf: Record<string, unknown>): void {
+    // Populate position directly (avoids creating Position3D objects)
+    this._networkPositionBuffer.x = this.node.position.x;
+    this._networkPositionBuffer.y = this.node.position.y;
+    this._networkPositionBuffer.z = this.node.position.z;
+
+    this._networkScaleBuffer.x = this.node.scale.x;
+    this._networkScaleBuffer.y = this.node.scale.y;
+    this._networkScaleBuffer.z = this.node.scale.z;
+
+    // Set base properties
+    buf.id = this.id;
+    buf.type = this.type;
+    buf.name = this.name;
+    buf.position = this._networkPositionBuffer;
+    buf.rotation = this.node.quaternion;
+    buf.scale = this._networkScaleBuffer;
+    buf.visible = this.node.visible;
+    buf.networkVersion = this.networkVersion;
+    buf.properties = this.config.properties || {};
+
+    // Copy data fields (skip transform data - EntityManager sends as p/q)
+    for (const key in this.data) {
+      if (
+        key !== "position" &&
+        key !== "quaternion" &&
+        key !== "scale" &&
+        key !== "id" &&
+        key !== "type" &&
+        key !== "name"
+      ) {
+        buf[key] = this.data[key];
+      }
+    }
+  }
+
+  /**
+   * Get ONLY changed data fields for incremental network updates.
+   *
+   * OPTIMIZATION: This method is designed for the hot path in sendNetworkUpdates.
+   * - Does NOT include position/rotation/scale (EntityManager sends those as p/q)
+   * - Reuses a pre-allocated buffer to avoid per-call allocations
+   * - Caller must serialize this data before the next call (buffer is reused)
+   *
+   * Use getNetworkData() for full entity sync (initial spawn, client connect).
+   * Use this method for incremental updates where position is sent separately.
+   */
+  getNetworkDataDelta(): Record<string, unknown> {
+    const buf = this._networkDeltaBuffer;
+
+    // Clear previous data (delete is slower than reassignment, but safer)
+    for (const key in buf) {
+      delete buf[key];
+    }
+
+    // Copy only changing data fields (skip position/quaternion/scale - sent as p/q)
+    for (const key in this.data) {
+      if (
+        key !== "position" &&
+        key !== "quaternion" &&
+        key !== "scale" &&
+        key !== "id" &&
+        key !== "type" &&
+        key !== "name"
+      ) {
+        buf[key] = this.data[key];
+      }
+    }
+
+    return buf;
   }
 
   // Apply network data (client-side)

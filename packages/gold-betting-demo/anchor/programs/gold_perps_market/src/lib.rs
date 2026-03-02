@@ -97,30 +97,28 @@ pub mod gold_perps_market {
             oracle.last_updated = now;
         }
 
+        require!(leverage >= 1 && leverage <= 100, PerpsError::InvalidLeverage);
         let size = collateral.checked_mul(leverage).ok_or(PerpsError::Overflow)?;
 
-        // Skew-adjusted execution price
-        let skew = oracle.total_long_oi as i64 - oracle.total_short_oi as i64;
-        let size_i64 = if position_type == 0 {
-            size as i64
+        // Skew-adjusted execution price using vAMM curve (x * y = k)
+        let d = vault.skew_scale as i128;
+        let skew128 = oracle.total_long_oi as i128 - oracle.total_short_oi as i128;
+        let size_signed128: i128 = if position_type == 0 {
+            size as i128
         } else {
-            -(size as i64)
+            -(size as i128)
         };
-        let index_price = oracle.spot_index as i64;
-        // Scale: 1e9 (lamport precision)
-        let one = 1_000_000_000i64;
-        let premium = ((skew + (size_i64 / 2)) * one) / vault.skew_scale as i64;
+        let index_price128 = oracle.spot_index as i128;
+        
+        // Virtual quote reserves before and after trade
+        let y1 = d + skew128;
+        let y2 = y1 + size_signed128;
+        require!(y1 > 0 && y2 > 0, PerpsError::Overflow); // Protect reserve exhaustion
 
-        let exec_price = if premium >= 0 {
-            index_price + (index_price * premium) / one
-        } else {
-            let abs_premium = -premium;
-            if abs_premium >= one {
-                index_price / 10 // Floor: 10% of index
-            } else {
-                index_price - (index_price * abs_premium) / one
-            }
-        };
+        // Divide midway to prevent i128 overflow: ( (index * y1)/d * y2 ) / d
+        let part1 = (index_price128 * y1) / d;
+        let exec_price128 = (part1 * y2) / d;
+        let exec_price = exec_price128.min(i64::MAX as i128) as i64;
 
         position.owner = ctx.accounts.trader.key();
         position.agent_id = agent_id;
@@ -165,27 +163,23 @@ pub mod gold_perps_market {
             oracle.last_updated = now;
         }
 
-        // Close-side skew execution price
-        let skew = oracle.total_long_oi as i64 - oracle.total_short_oi as i64;
-        let size_delta_i64 = if position.position_type == 0 {
-            -(position.size as i64)
+        // Close-side skew execution price using vAMM curve (x * y = k)
+        let d = vault.skew_scale as i128;
+        let skew128 = oracle.total_long_oi as i128 - oracle.total_short_oi as i128;
+        let size_delta128: i128 = if position.position_type == 0 {
+            -(position.size as i128)
         } else {
-            position.size as i64
+            position.size as i128
         };
-        let index_price = oracle.spot_index as i64;
-        let one = 1_000_000_000i64;
-        let premium = ((skew + (size_delta_i64 / 2)) * one) / vault.skew_scale as i64;
+        let index_price128 = oracle.spot_index as i128;
+        
+        let y1 = d + skew128;
+        let y2 = y1 + size_delta128;
+        require!(y1 > 0 && y2 > 0, PerpsError::Overflow);
 
-        let exec_price = if premium >= 0 {
-            index_price + (index_price * premium) / one
-        } else {
-            let abs_premium = -premium;
-            if abs_premium >= one {
-                index_price / 10
-            } else {
-                index_price - (index_price * abs_premium) / one
-            }
-        };
+        let part1 = (index_price128 * y1) / d;
+        let exec_price128 = (part1 * y2) / d;
+        let exec_price = exec_price128.min(i64::MAX as i128) as i64;
 
         let entry_price = position.entry_price;
         let size = position.size;
@@ -205,9 +199,16 @@ pub mod gold_perps_market {
         let collateral = position.collateral as i64;
         let settlement = std::cmp::max(0, collateral + pnl) as u64;
 
-        // Transfer SOL settlement from vault PDA → trader
+        // Transfer SOL settlement from vault PDA → owner
         if settlement > 0 {
-            **ctx.accounts.vault.to_account_info().try_borrow_mut_lamports()? -= settlement;
+            // Guard against draining the vault below rent-exempt minimum
+            let vault_info = ctx.accounts.vault.to_account_info();
+            let vault_lamports = vault_info.lamports();
+            let max_payout = vault_lamports.saturating_sub(Rent::get()?.minimum_balance(VaultState::SIZE));
+            
+            require!(max_payout >= settlement, PerpsError::InsufficientLiquidity);
+
+            **vault_info.try_borrow_mut_lamports()? -= settlement;
             **ctx.accounts.owner.to_account_info().try_borrow_mut_lamports()? += settlement;
         }
 
@@ -222,26 +223,22 @@ pub mod gold_perps_market {
         let oracle = &mut ctx.accounts.oracle;
         let vault = &ctx.accounts.vault;
 
-        let skew = oracle.total_long_oi as i64 - oracle.total_short_oi as i64;
-        let size_delta_i64 = if position.position_type == 0 {
-            -(position.size as i64)
+        let d = vault.skew_scale as i128;
+        let skew128 = oracle.total_long_oi as i128 - oracle.total_short_oi as i128;
+        let size_delta128: i128 = if position.position_type == 0 {
+            -(position.size as i128)
         } else {
-            position.size as i64
+            position.size as i128
         };
-        let index_price = oracle.spot_index as i64;
-        let one = 1_000_000_000i64;
-        let premium = ((skew + (size_delta_i64 / 2)) * one) / vault.skew_scale as i64;
+        let index_price128 = oracle.spot_index as i128;
+        
+        let y1 = d + skew128;
+        let y2 = y1 + size_delta128;
+        require!(y1 > 0 && y2 > 0, PerpsError::Overflow);
 
-        let exec_price = if premium >= 0 {
-            index_price + (index_price * premium) / one
-        } else {
-            let abs_premium = -premium;
-            if abs_premium >= one {
-                index_price / 10
-            } else {
-                index_price - (index_price * abs_premium) / one
-            }
-        };
+        let part1 = (index_price128 * y1) / d;
+        let exec_price128 = (part1 * y2) / d;
+        let exec_price = exec_price128.min(i64::MAX as i128) as i64;
 
         let entry_price = position.entry_price;
         let size = position.size;
@@ -305,7 +302,7 @@ pub struct UpdateOracle<'info> {
     pub oracle: Account<'info, OracleState>,
     /// Vault is needed to read skew_scale / funding_velocity during drift update.
     pub vault: Account<'info, VaultState>,
-    #[account(mut)]
+    #[account(mut, address = vault.authority @ PerpsError::InvalidAuthority)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
@@ -368,6 +365,11 @@ pub struct VaultState {
     pub funding_velocity: u64,
 }
 
+impl VaultState {
+    /// Byte size of VaultState account data (used for rent calculation).
+    pub const SIZE: usize = 8 + 32 + 8 + 8 + 8; // discriminator + authority + insurance_fund + skew_scale + funding_velocity
+}
+
 #[account]
 pub struct OracleState {
     pub agent_id: u32,
@@ -401,4 +403,10 @@ pub enum PerpsError {
     NotLiquidatable,
     #[msg("Numeric overflow in size calculation")]
     Overflow,
+    #[msg("Unauthorized keeper authority")]
+    InvalidAuthority,
+    #[msg("Leverage must be between 1 and 100")]
+    InvalidLeverage,
+    #[msg("Vault possesses insufficient liquidity to settle this position")]
+    InsufficientLiquidity,
 }

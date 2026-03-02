@@ -2845,47 +2845,55 @@ export class MobEntity extends CombatantEntity {
     };
   }
 
+  // PERF: Pre-allocated buffer for death position to avoid array allocation
+  private readonly _deathPositionBuffer: [number, number, number] = [0, 0, 0];
+  // PERF: Pre-allocated buffer for position to avoid array allocation
+  private readonly _mobPositionBuffer: [number, number, number] = [0, 0, 0];
+
   // Network data override
+  // PERF: Mutates buffer in-place instead of creating new objects
   getNetworkData(): Record<string, unknown> {
-    const baseData = super.getNetworkData();
+    // Get base data (returns parent's pre-allocated buffer)
+    const buf = super.getNetworkData();
 
     // Handle death state separately
     if (this.deathManager.isCurrentlyDead()) {
-      // Remove ALL position data from baseData
-      delete baseData.x;
-      delete baseData.y;
-      delete baseData.z;
-      delete baseData.p;
-      delete baseData.position;
+      // Remove ALL position data from buffer
+      delete buf.x;
+      delete buf.y;
+      delete buf.z;
+      delete buf.p;
+      delete buf.position;
 
-      const networkData: Record<string, unknown> = {
-        ...baseData,
-        model: this.config.model,
-        mobType: this.config.mobType,
-        level: this.config.level,
-        currentHealth: this.config.currentHealth,
-        maxHealth: this.config.maxHealth,
-        aiState: this.config.aiState,
-        targetPlayerId: this.config.targetPlayerId,
-        deathTime: this.deathManager.getDeathTime(),
-        scale: this.config.scale, // Include scale for client
-      };
+      // Add mob-specific fields directly to buffer (no spread/new object)
+      buf.model = this.config.model;
+      buf.mobType = this.config.mobType;
+      buf.level = this.config.level;
+      buf.currentHealth = this.config.currentHealth;
+      buf.maxHealth = this.config.maxHealth;
+      buf.aiState = this.config.aiState;
+      buf.targetPlayerId = this.config.targetPlayerId;
+      buf.deathTime = this.deathManager.getDeathTime();
+      buf.scale = this.config.scale;
 
       // Send death emote once
       if (this._serverEmote) {
-        networkData.e = this._serverEmote;
+        buf.e = this._serverEmote;
         this._serverEmote = null;
       }
 
       // ALWAYS send death position when dead (handles packet loss, late-joining clients)
-      // Previously only sent once, but clients would miss it and use wrong position
       const deathPos = this.deathManager.getDeathPosition();
       if (deathPos) {
-        networkData.p = [deathPos.x, deathPos.y, deathPos.z];
+        // Use pre-allocated buffer for death position
+        this._deathPositionBuffer[0] = deathPos.x;
+        this._deathPositionBuffer[1] = deathPos.y;
+        this._deathPositionBuffer[2] = deathPos.z;
+        buf.p = this._deathPositionBuffer;
         this.deathManager.markDeathStateSent();
       }
 
-      return networkData;
+      return buf;
     }
 
     // Normal path for living mobs
@@ -2895,29 +2903,30 @@ export class MobEntity extends CombatantEntity {
     } | null;
     const inCombat = combatSystem?.isInCombat?.(this.id) ?? false;
 
-    const networkData: Record<string, unknown> = {
-      ...baseData,
-      model: this.config.model,
-      mobType: this.config.mobType,
-      level: this.config.level,
-      currentHealth: this.config.currentHealth,
-      maxHealth: this.config.maxHealth,
-      aiState: this.config.aiState,
-      targetPlayerId: this.config.targetPlayerId,
-      c: inCombat, // Combat state for health bar visibility (like players)
-      scale: this.config.scale, // Include scale for client model sizing
-    };
+    // Add mob-specific fields directly to buffer (no spread/new object)
+    buf.model = this.config.model;
+    buf.mobType = this.config.mobType;
+    buf.level = this.config.level;
+    buf.currentHealth = this.config.currentHealth;
+    buf.maxHealth = this.config.maxHealth;
+    buf.aiState = this.config.aiState;
+    buf.targetPlayerId = this.config.targetPlayerId;
+    buf.c = inCombat;
+    buf.scale = this.config.scale;
 
     // CRITICAL: Force position to be included if not present
-    // Parent class may omit position to save bandwidth, but we always need it for mobs
-    if (!networkData.p || !Array.isArray(networkData.p)) {
+    if (!buf.p || !Array.isArray(buf.p)) {
       const pos = this.getPosition();
-      networkData.p = [pos.x, pos.y, pos.z];
+      // Use pre-allocated buffer for position
+      this._mobPositionBuffer[0] = pos.x;
+      this._mobPositionBuffer[1] = pos.y;
+      this._mobPositionBuffer[2] = pos.z;
+      buf.p = this._mobPositionBuffer;
     }
 
     // Only broadcast server-forced emotes
     if (this._serverEmote) {
-      networkData.e = this._serverEmote;
+      buf.e = this._serverEmote;
       this._serverEmote = null;
     }
 
@@ -2926,7 +2935,7 @@ export class MobEntity extends CombatantEntity {
       this._justRespawned = false;
     }
 
-    return networkData;
+    return buf;
   }
 
   /**

@@ -34,6 +34,27 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function rpcWithTimeoutRetry<T>(
+  run: () => Promise<T>,
+  attempts = 3,
+): Promise<T> {
+  let lastError: unknown = new Error("RPC retries exhausted");
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      const timedOut = message.includes("TransactionExpiredTimeoutError");
+      if (!timedOut || attempt === attempts - 1) {
+        throw error;
+      }
+      await sleep(750 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
 async function airdrop(
   connection: anchor.web3.Connection,
   recipient: PublicKey,
@@ -119,17 +140,19 @@ describe("gold_clob_market", () => {
       clobProgram.programId,
     );
 
-    await clobProgram.methods
-      .initializeMatch(500)
-      .accountsPartial({
-        matchState: matchState.publicKey,
-        user: payer.publicKey,
-        config: configPda,
-        vault: vaultPda,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([matchState])
-      .rpc();
+    await rpcWithTimeoutRetry(() =>
+      clobProgram.methods
+        .initializeMatch(500)
+        .accountsPartial({
+          matchState: matchState.publicKey,
+          user: payer.publicKey,
+          config: configPda,
+          vault: vaultPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([matchState])
+        .rpc(),
+    );
 
     const matchAccount = (await clobProgram.account.matchState.fetch(
       matchState.publicKey,

@@ -240,6 +240,20 @@ async function main() {
     throw new Error(`${label} failed after ${maxAttempts} attempts: ${reason}`);
   }
 
+  async function sendAndConfirmWithRetries(
+    label: string,
+    transaction: Transaction,
+    signers: Keypair[] = [],
+  ) {
+    await recordWithRetries(label, () =>
+      provider.sendAndConfirm(transaction, signers, {
+        commitment: "confirmed",
+        preflightCommitment: "confirmed",
+        maxRetries: 8,
+      }),
+    );
+  }
+
   async function sendSol(to: PublicKey, lamports: number) {
     const tx = new Transaction().add(
       SystemProgram.transfer({
@@ -248,8 +262,7 @@ async function main() {
         lamports,
       }),
     );
-    const sig = await provider.sendAndConfirm(tx, []);
-    signatures.push(sig);
+    await sendAndConfirmWithRetries("fund-wallet", tx, []);
   }
 
   async function fundWallets(recipients: PublicKey[], lamports: number) {
@@ -264,8 +277,7 @@ async function main() {
           }),
         );
       }
-      const sig = await provider.sendAndConfirm(tx, []);
-      signatures.push(sig);
+      await sendAndConfirmWithRetries("fund-wallet-batch", tx, []);
     }
   }
 

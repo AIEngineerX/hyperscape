@@ -259,17 +259,13 @@ export class FireEntity extends InteractableEntity {
     }
   }
 
-  /**
-   * Network data for syncing to clients.
-   */
+  // PERF: Mutates buffer in-place instead of creating new objects
   getNetworkData(): Record<string, unknown> {
-    const baseData = super.getNetworkData();
-    return {
-      ...baseData,
-      createdByPlayerId: this.createdByPlayerId,
-      expiresAtTick: this.expiresAtTick,
-      isActive: this.isActive,
-    };
+    const buf = super.getNetworkData();
+    buf.createdByPlayerId = this.createdByPlayerId;
+    buf.expiresAtTick = this.expiresAtTick;
+    buf.isActive = this.isActive;
+    return buf;
   }
 
   /**

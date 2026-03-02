@@ -3305,7 +3305,7 @@ export function App() {
                 <SolanaClobPanel
                   agent1Name={effAgent1Name}
                   agent2Name={effAgent2Name}
-                  compact
+                  compact={!isE2eMode}
                 />
               )}
             </div>

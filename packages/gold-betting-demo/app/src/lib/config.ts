@@ -86,6 +86,43 @@ function resolveEnvironment(): Environment {
 
 export const ACTIVE_ENV: Environment = resolveEnvironment();
 
+function isPrivateIpv4Host(hostname: string): boolean {
+  if (/^10\./.test(hostname)) return true;
+  if (/^192\.168\./.test(hostname)) return true;
+  const match = hostname.match(/^172\.(\d{1,3})\./);
+  if (!match) return false;
+  const octet = Number.parseInt(match[1], 10);
+  return Number.isFinite(octet) && octet >= 16 && octet <= 31;
+}
+
+function isLocalHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    hostname.endsWith(".local") ||
+    isPrivateIpv4Host(hostname)
+  );
+}
+
+function isPublicBrowserRuntime(): boolean {
+  if (typeof window === "undefined") return false;
+  const hostname = window.location.hostname.toLowerCase();
+  return !isLocalHostname(hostname);
+}
+
+function resolveRuntimeEnvironment(buildEnv: Environment): Environment {
+  if (!isPublicBrowserRuntime()) {
+    return buildEnv;
+  }
+  if (buildEnv === "localnet" || buildEnv === "e2e") {
+    return "mainnet-beta";
+  }
+  return buildEnv;
+}
+
+export const RUNTIME_ENV: Environment = resolveRuntimeEnvironment(ACTIVE_ENV);
+
 export interface EnvConfig {
   cluster: SolanaCluster;
   rpcUrl: string;
@@ -129,8 +166,8 @@ export interface EnvConfig {
 }
 
 const DEFAULT_STREAM_SOURCES = [
-  "https://www.twitch.tv/shawmakesmagic",
   "https://www.youtube.com/embed/live_stream?channel=UCiDiDJaRuJ-Iq9M5SNGDsUw",
+  "https://www.twitch.tv/shawmakesmagic",
 ] as const;
 const DEFAULT_STREAM_URL = DEFAULT_STREAM_SOURCES[0];
 const DEFAULT_STREAM_FALLBACK_URL = DEFAULT_STREAM_SOURCES[1];
@@ -258,7 +295,17 @@ export const ENV_CONFIGS: Record<Environment, EnvConfig> = {
   } as EnvConfig,
 };
 
-const baseEnvConfig = ENV_CONFIGS[ACTIVE_ENV];
+if (
+  typeof window !== "undefined" &&
+  ACTIVE_ENV !== RUNTIME_ENV &&
+  typeof console !== "undefined"
+) {
+  console.warn(
+    `[config] forcing runtime env '${RUNTIME_ENV}' on public host (build env '${ACTIVE_ENV}')`,
+  );
+}
+
+const baseEnvConfig = ENV_CONFIGS[RUNTIME_ENV];
 const envGameApiUrl = readEnvString("VITE_GAME_API_URL");
 const resolvedGameApiUrl = envGameApiUrl ?? baseEnvConfig.gameApiUrl;
 const envGameWsUrl = readEnvString("VITE_GAME_WS_URL");
@@ -408,10 +455,13 @@ const USE_GAME_RPC_PROXY =
   CONFIG.cluster === "mainnet-beta"
     ? true
     : readEnvBoolean("VITE_USE_GAME_RPC_PROXY", false);
-export const ENABLE_MANUAL_MARKET_ADMIN_CONTROLS = readEnvBoolean(
+const configuredManualMarketControls = readEnvBoolean(
   "VITE_ENABLE_MANUAL_MARKET_ADMIN_CONTROLS",
-  ACTIVE_ENV === "localnet" || ACTIVE_ENV === "e2e",
+  RUNTIME_ENV === "localnet" || RUNTIME_ENV === "e2e",
 );
+export const ENABLE_MANUAL_MARKET_ADMIN_CONTROLS = isPublicBrowserRuntime()
+  ? false
+  : configuredManualMarketControls;
 
 export function buildArenaWriteHeaders(): Record<string, string> {
   const headers: Record<string, string> = {

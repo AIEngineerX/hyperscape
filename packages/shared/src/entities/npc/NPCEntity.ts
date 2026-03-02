@@ -708,15 +708,15 @@ export class NPCEntity extends Entity {
     }
   }
 
+  // PERF: Mutates buffer in-place instead of creating new objects
   public getNetworkData(): Record<string, unknown> {
-    return {
-      ...super.getNetworkData(),
-      model: this.config.model,
-      npcType: this.config.npcType,
-      npcId: this.config.npcId,
-      services: this.config.services,
-      questIds: this.config.questIds,
-    };
+    const buf = super.getNetworkData();
+    buf.model = this.config.model;
+    buf.npcType = this.config.npcType;
+    buf.npcId = this.config.npcId;
+    buf.services = this.config.services;
+    buf.questIds = this.config.questIds;
+    return buf;
   }
 
   // Override serialize to include NPC-specific fields for network transmission

@@ -360,24 +360,23 @@ export class ResourceEntity extends InteractableEntity {
     } as EntityData;
   }
 
+  // PERF: Mutates buffer in-place instead of creating new objects
   public getNetworkData(): Record<string, unknown> {
-    const baseData = super.getNetworkData();
-    return {
-      ...baseData,
-      model: this.config.model,
-      resourceType: this.config.resourceType,
-      resourceId: this.config.resourceId,
-      depleted: this.config.depleted,
-      harvestSkill: this.config.harvestSkill,
-      requiredLevel: this.config.requiredLevel,
-      harvestTime: this.config.harvestTime,
-      harvestYield: this.config.harvestYield,
-      respawnTime: this.config.respawnTime,
-      modelScale: this.config.modelScale,
-      depletedModelScale: this.config.depletedModelScale,
-      depletedModelPath: this.config.depletedModelPath,
-      procgenPreset: this.config.procgenPreset,
-    };
+    const buf = super.getNetworkData();
+    buf.model = this.config.model;
+    buf.resourceType = this.config.resourceType;
+    buf.resourceId = this.config.resourceId;
+    buf.depleted = this.config.depleted;
+    buf.harvestSkill = this.config.harvestSkill;
+    buf.requiredLevel = this.config.requiredLevel;
+    buf.harvestTime = this.config.harvestTime;
+    buf.harvestYield = this.config.harvestYield;
+    buf.respawnTime = this.config.respawnTime;
+    buf.modelScale = this.config.modelScale;
+    buf.depletedModelScale = this.config.depletedModelScale;
+    buf.depletedModelPath = this.config.depletedModelPath;
+    buf.procgenPreset = this.config.procgenPreset;
+    return buf;
   }
 
   public updateFromNetwork(data: Record<string, unknown>): void {

@@ -49,6 +49,14 @@ export class SpatialEntityRegistry {
   private activeChunksDirty = true;
   private lastPlayerChunks = new Map<string, ChunkKey>();
 
+  // PERF: Pre-allocated buffers for hot path methods (avoids per-call allocations)
+  private readonly _playerPositionsBuffer: Array<{
+    entityId: string;
+    x: number;
+    z: number;
+  }> = [];
+  private readonly _activeEntitiesBuffer: string[] = [];
+
   private getChunkKey(x: number, z: number): ChunkKey {
     return `${Math.floor(x / this.CHUNK_SIZE)}_${Math.floor(z / this.CHUNK_SIZE)}`;
   }
@@ -205,13 +213,32 @@ export class SpatialEntityRegistry {
     return chunk ? Array.from(chunk) : [];
   }
 
+  // PERF: Returns a pre-allocated buffer - caller must NOT store the reference
+  // Buffer is valid until next call to this method
   getPlayerPositions(): Array<{ entityId: string; x: number; z: number }> {
-    const positions: Array<{ entityId: string; x: number; z: number }> = [];
+    const buf = this._playerPositionsBuffer;
+
+    // Ensure buffer has enough slots (grow if needed, never shrink)
+    while (buf.length < this.players.size) {
+      buf.push({ entityId: "", x: 0, z: 0 });
+    }
+
+    // Populate buffer entries
+    let i = 0;
     for (const playerId of this.players) {
       const reg = this.entities.get(playerId);
-      if (reg) positions.push({ entityId: playerId, x: reg.x, z: reg.z });
+      if (reg) {
+        const entry = buf[i];
+        entry.entityId = playerId;
+        entry.x = reg.x;
+        entry.z = reg.z;
+        i++;
+      }
     }
-    return positions;
+
+    // Set length to actual count (reuses existing array, doesn't create new one)
+    buf.length = i;
+    return buf;
   }
 
   getNearestPlayer(
@@ -274,15 +301,19 @@ export class SpatialEntityRegistry {
     return reg ? this.isChunkActive(reg.chunkKey) : false;
   }
 
+  // PERF: Returns a pre-allocated buffer - caller must NOT store the reference
+  // Buffer is valid until next call to this method
   getActiveEntities(): string[] {
-    const result: string[] = [];
+    const buf = this._activeEntitiesBuffer;
+    buf.length = 0;
+
     for (const chunkKey of this.getActiveChunks()) {
       const chunk = this.entityChunks.get(chunkKey);
       if (chunk) {
-        for (const entityId of chunk) result.push(entityId);
+        for (const entityId of chunk) buf.push(entityId);
       }
     }
-    return result;
+    return buf;
   }
 
   getEntityRegistration(entityId: string): EntityRegistration | undefined {

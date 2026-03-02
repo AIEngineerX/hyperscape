@@ -844,6 +844,79 @@ async function runMaintenance(): Promise<void> {
   }
 
   // NOTE: We do NOT create new rounds here anymore.
+
+  await runLiquidatorLoop();
+}
+
+async function runLiquidatorLoop(): Promise<void> {
+  if (!keeperProgramApiReady) return;
+  try {
+    const allPositions = await perpsProgram.account.positionState.all();
+    const vaultPda = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault")],
+      perpsProgram.programId,
+    )[0];
+
+    for (const pos of allPositions) {
+      if (pos.account.size.eq(new BN(0))) continue;
+
+      const agentId = pos.account.agentId;
+      const oraclePda = PublicKey.findProgramAddressSync(
+        [Buffer.from("oracle"), new BN(agentId).toArrayLike(Buffer, "le", 4)],
+        perpsProgram.programId,
+      )[0];
+
+      const oracleAcc =
+        await perpsProgram.account.oracleState.fetchNullable(oraclePda);
+      if (!oracleAcc) continue;
+
+      const spotIndex = Number(oracleAcc.spotIndex) / LAMPORTS_PER_SOL;
+      const entryPrice = Number(pos.account.entryPrice) / LAMPORTS_PER_SOL;
+      const size = Number(pos.account.size) / LAMPORTS_PER_SOL;
+      const collateral = Number(pos.account.collateral) / LAMPORTS_PER_SOL;
+      const isLong = pos.account.positionType === 0;
+
+      let pnl = 0;
+      if (isLong) {
+        pnl = (spotIndex - entryPrice) * (size / entryPrice);
+      } else {
+        pnl = (entryPrice - spotIndex) * (size / entryPrice);
+      }
+
+      const marginRatio = (collateral + pnl) / size;
+      // Liquidate if margin ratio falls below maintenance (10%)
+      if (marginRatio < 0.1) {
+        console.log(
+          `[Keeper] Liquidating position ${pos.publicKey.toBase58()} (Margin: ${(marginRatio * 100).toFixed(2)}%)`,
+        );
+        try {
+          await runWithRecovery(
+            () =>
+              perpsProgram.methods
+                .liquidate()
+                .accountsPartial({
+                  position: pos.publicKey,
+                  oracle: oraclePda,
+                  vault: vaultPda,
+                  liquidator: botKeypair.publicKey,
+                })
+                .rpc(),
+            connection,
+          );
+          console.log(
+            `[Keeper] Liquidated position ${pos.publicKey.toBase58()}`,
+          );
+        } catch (e) {
+          console.error(
+            `[Keeper] Failed to liquidate ${pos.publicKey.toBase58()}:`,
+            e,
+          );
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[Keeper] Error in liquidator loop:", e);
+  }
 }
 
 for (;;) {

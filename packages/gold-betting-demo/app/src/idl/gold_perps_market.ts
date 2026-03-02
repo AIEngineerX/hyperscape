@@ -300,6 +300,21 @@ export type GoldPerpsMarket = {
       name: "overflow";
       msg: "Numeric overflow in size calculation";
     },
+    {
+      code: 6003;
+      name: "invalidAuthority";
+      msg: "Unauthorized keeper authority";
+    },
+    {
+      code: 6004;
+      name: "invalidLeverage";
+      msg: "Leverage must be between 1 and 100";
+    },
+    {
+      code: 6005;
+      name: "insufficientLiquidity";
+      msg: "Vault possesses insufficient liquidity to settle this position";
+    },
   ];
   types: [
     {

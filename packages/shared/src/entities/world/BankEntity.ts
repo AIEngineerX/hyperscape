@@ -285,15 +285,11 @@ export class BankEntity extends InteractableEntity {
     }
   }
 
-  /**
-   * Network data override
-   */
+  // PERF: Mutates buffer in-place instead of creating new objects
   getNetworkData(): Record<string, unknown> {
-    const baseData = super.getNetworkData();
-    return {
-      ...baseData,
-      bankId: this.bankId,
-    };
+    const buf = super.getNetworkData();
+    buf.bankId = this.bankId;
+    return buf;
   }
 
   protected clientUpdate(deltaTime: number): void {

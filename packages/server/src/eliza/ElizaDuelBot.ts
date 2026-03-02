@@ -184,6 +184,12 @@ export class ElizaDuelBot extends EventEmitter {
         const authToken = await createJWT({ userId: accountId });
 
         // Create character using shared helper
+        const duelBotUsePostgres = !/^(0|false|no|off)$/i.test(
+          process.env.DUEL_BOT_USE_POSTGRES || "false",
+        );
+        const duelBotDatabaseUrl = duelBotUsePostgres
+          ? process.env.DATABASE_URL || process.env.POSTGRES_URL || ""
+          : "";
         const { character, characterId } = createAgentCharacter(modelConfig, {
           idPrefix: "agent",
           name,
@@ -195,6 +201,10 @@ export class ElizaDuelBot extends EventEmitter {
             HYPERSCAPE_CHARACTER_ID: "",
             HYPERSCAPE_AUTONOMY_MODE: "llm",
             HYPERSCAPE_AUTO_ACCEPT_DUELS: "true",
+            // Duel bots should default to in-memory PGLite so local duel stack
+            // does not depend on Postgres + pgvector availability.
+            POSTGRES_URL: duelBotDatabaseUrl,
+            DATABASE_URL: duelBotDatabaseUrl,
           },
         });
         if (character.settings?.secrets) {

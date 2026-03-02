@@ -169,14 +169,26 @@ export class DuelCombatResolver {
     }
 
     // Generate Oracle Data (seed, replayHash)
-    const randomSeedBuf = crypto.randomBytes(8);
-    const duelSeed = randomSeedBuf.readBigUInt64BE(0).toString();
+    // Removed larp crypto.randomBytes(8). Using deterministic derivation from the session IDs and fightStart.
+    const duelSeedString = `${session.duelId}-${session.fightStartedAt || session.createdAt}`;
+    const duelSeedHex = crypto
+      .createHash("sha256")
+      .update(duelSeedString)
+      .digest("hex")
+      .slice(0, 16);
+    // Parse the first 8 bytes as a BigInt for the seed
+    const duelSeed = BigInt(`0x${duelSeedHex}`).toString();
+
+    // The replay hash should cryptographically bind the deterministic outcome.
     const hashData = JSON.stringify({
       duelId: session.duelId,
       winnerId,
       loserId,
       reason,
+      fightStartedAt: session.fightStartedAt || session.createdAt,
       finishedAt: session.finishedAt,
+      // Include stakes to prove economic outcome
+      winnerReceivesValue,
     });
     const replayHashHex = crypto
       .createHash("sha256")
