@@ -165,7 +165,7 @@ jobs:
             # Write environment variables to /tmp FIRST (so git reset in deploy-vast.sh doesn't overwrite)
             # Using direct secret substitution since envs parameter doesn't work reliably
             echo "[deploy] Writing secrets to /tmp/hyperscape-secrets.env"
-            cat > /tmp/hyperscape-secrets.env << 'ENVEOF'
+            cat > /tmp/hyperscape-secrets.env << ENVEOF
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             JWT_SECRET=${{ secrets.JWT_SECRET }}
             ARENA_EXTERNAL_BET_WRITE_KEY=${{ secrets.ARENA_EXTERNAL_BET_WRITE_KEY }}
