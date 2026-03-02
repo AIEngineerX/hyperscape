@@ -488,7 +488,7 @@ async function setupBrowser() {
       console.log(`[Main] Navigating to ${candidateUrl}...`);
       try {
         await page.goto(candidateUrl, {
-          timeout: 60_000,
+          timeout: 120_000,
           waitUntil: "domcontentloaded",
         });
       } catch (err) {
@@ -509,7 +509,7 @@ async function setupBrowser() {
   } else {
     try {
       await page.goto(selectedGameUrl, {
-        timeout: 60_000,
+        timeout: 120_000,
         waitUntil: "domcontentloaded",
       });
     } catch (err) {
