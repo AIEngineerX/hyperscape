@@ -40,7 +40,6 @@ import {
   idleAction,
   approachEntityAction,
   attackEntityAction,
-  lootStarterChestAction,
 } from "../actions/autonomous.js";
 import { setGoalAction, navigateToAction } from "../actions/goals.js";
 import {
@@ -124,7 +123,8 @@ export interface CurrentGoal {
     | "idle"
     | "starter_items"
     | "user_command"
-    | "questing";
+    | "questing"
+    | "banking";
   description: string;
   target: number;
   progress: number;
@@ -1352,7 +1352,6 @@ export class AutonomousBehaviorManager {
       runecraftAction,
       pickupItemAction,
       equipItemAction,
-      lootStarterChestAction,
       talkToNpcAction,
       acceptQuestAction,
       completeQuestAction,
@@ -2511,6 +2510,18 @@ export class AutonomousBehaviorManager {
    */
   getGoal(): CurrentGoal | null {
     return this.currentGoal;
+  }
+
+  /**
+   * Get duel history for strategy awareness
+   * TODO: Implement actual duel tracking
+   */
+  getDuelHistory(): Array<{
+    won: boolean;
+    opponentName: string;
+    myHealth: number;
+  }> {
+    return [];
   }
 
   /**

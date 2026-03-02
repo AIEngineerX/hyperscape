@@ -228,7 +228,7 @@ export class CombatSystem extends SystemBase {
     spellId: undefined as string | undefined,
     arrowId: undefined as string | undefined,
     delayMs: undefined as number | undefined,
-    flightTimeMs: undefined as number | undefined,
+    travelDurationMs: undefined as number | undefined,
   };
 
   private readonly _faceTargetPayload = {
@@ -365,7 +365,7 @@ export class CombatSystem extends SystemBase {
     this._projectileLaunchedPayload.spellId = spellId;
     this._projectileLaunchedPayload.arrowId = arrowId;
     this._projectileLaunchedPayload.delayMs = delayMs;
-    this._projectileLaunchedPayload.flightTimeMs = flightTimeMs;
+    this._projectileLaunchedPayload.travelDurationMs = flightTimeMs;
     this.emitTypedEvent(
       EventType.COMBAT_PROJECTILE_LAUNCHED,
       this._projectileLaunchedPayload,
