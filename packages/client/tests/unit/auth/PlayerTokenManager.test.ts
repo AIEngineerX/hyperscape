@@ -216,12 +216,12 @@ describe("PlayerTokenManager", () => {
         machineId: "machine123",
       };
 
-      localStorage.getItem = vi.fn((key) => {
+      localStorage.getItem = vi.fn((key: string): string | null => {
         if (key === "hyperscape_player_token") {
           return JSON.stringify(existingToken);
         }
         return null;
-      });
+      }) as typeof localStorage.getItem;
 
       const newManager = new MockPlayerTokenManager(localStorage);
       const token = newManager.getCurrentToken();
