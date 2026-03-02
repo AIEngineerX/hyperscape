@@ -66,6 +66,8 @@ module.exports = {
                 ALLOW_DESTRUCTIVE_CHANGES: "false",
                 AUTO_START_AGENTS: "true",
                 AUTO_START_AGENTS_MAX: "10",
+                SPAWN_MODEL_AGENTS: "true",
+                MAX_MODEL_AGENTS: "4",
                 MALLOC_TRIM_THRESHOLD_: "-1",
                 MIMALLOC_ALLOW_DECOMMIT: "0",
                 MIMALLOC_ALLOW_RESET: "0",
