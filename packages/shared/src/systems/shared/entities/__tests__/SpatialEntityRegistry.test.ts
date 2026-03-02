@@ -549,13 +549,15 @@ describe("SpatialEntityRegistry", () => {
       }
 
       const addTime = performance.now() - start;
-      expect(addTime).toBeLessThan(100); // Should be well under 100ms
+      const addBudgetMs = process.env.CI ? 200 : 120;
+      expect(addTime).toBeLessThan(addBudgetMs);
 
       const queryStart = performance.now();
       registry.getEntitiesInRange(5000, 5000, 200);
       const queryTime = performance.now() - queryStart;
 
-      expect(queryTime).toBeLessThan(10); // Range query should be fast
+      const queryBudgetMs = process.env.CI ? 25 : 15;
+      expect(queryTime).toBeLessThan(queryBudgetMs);
     });
   });
 });

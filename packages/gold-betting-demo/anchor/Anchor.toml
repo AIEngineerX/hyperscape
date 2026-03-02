@@ -23,6 +23,9 @@ gold_perps_market = "HbXhqEFevpkfYdZCN6YmJGRmQmj9vsBun2ZHjeeaLRik"
 [registry]
 url = "https://api.apr.dev"
 
+[test]
+startup_wait = 60000
+
 [provider]
 # Use localnet for testing (anchor test spins up a local validator)
 # For devnet/mainnet deployments, use: anchor deploy --provider.cluster devnet

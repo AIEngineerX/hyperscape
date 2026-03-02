@@ -54,6 +54,11 @@ import {
   generateWebCodecsCaptureScript,
 } from "../src/streaming/index.js";
 import { errMsg } from "../src/shared/errMsg.ts";
+import { getStreamLeakDiagnostics } from "../src/streaming/stream-leak-diagnostics.js";
+
+// Auto-enable leak diagnostics if STREAM_LEAK_DIAGNOSTICS=true.
+// Installed before any timers are allocated so the counts are accurate.
+getStreamLeakDiagnostics();
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -81,29 +86,8 @@ function withViewerAccessToken(rawUrl: string): string {
   }
 }
 
-/**
- * Process game URL for streaming.
- * WebGPU is REQUIRED - there is no WebGL fallback.
- */
-function withRendererCaptureHints(rawUrl: string): string {
-  // WebGPU is required - we don't add any disable flags
-  // The STREAM_CAPTURE_DISABLE_WEBGPU env var is ignored
-  if (
-    /^(1|true|yes|on)$/i.test(process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "")
-  ) {
-    console.warn(
-      "[Main] WARNING: STREAM_CAPTURE_DISABLE_WEBGPU is set but ignored - WebGPU is REQUIRED",
-    );
-  }
-  return rawUrl;
-}
-
 const GAME_URL_CANDIDATES = Array.from(
-  new Set(
-    [GAME_URL, ...GAME_FALLBACK_URLS]
-      .map(withViewerAccessToken)
-      .map(withRendererCaptureHints),
-  ),
+  new Set([GAME_URL, ...GAME_FALLBACK_URLS].map(withViewerAccessToken)),
 );
 
 const BRIDGE_PORT = parseInt(process.env.RTMP_BRIDGE_PORT || "8765", 10);
@@ -117,24 +101,19 @@ const CAPTURE_MODE = (process.env.STREAM_CAPTURE_MODE?.trim() || "cdp") as
   | "cdp"
   | "mediarecorder"
   | "webcodecs";
-// Headless modes: false (with display), true (legacy headless), "new" (Chrome's new headless with GPU)
-const STREAM_CAPTURE_HEADLESS_RAW =
-  process.env.STREAM_CAPTURE_HEADLESS?.trim() || "false";
-const STREAM_CAPTURE_HEADLESS =
-  STREAM_CAPTURE_HEADLESS_RAW === "true" ||
-  STREAM_CAPTURE_HEADLESS_RAW === "new";
-const STREAM_CAPTURE_HEADLESS_NEW = STREAM_CAPTURE_HEADLESS_RAW === "new";
+const STREAM_CAPTURE_HEADLESS = process.env.STREAM_CAPTURE_HEADLESS === "true";
 const STREAM_CAPTURE_CHANNEL = process.env.STREAM_CAPTURE_CHANNEL?.trim() || "";
-const STREAM_CAPTURE_EXECUTABLE =
-  process.env.STREAM_CAPTURE_EXECUTABLE?.trim() || "";
-const STREAM_CAPTURE_USE_EGL =
-  process.env.STREAM_CAPTURE_USE_EGL?.toLowerCase() === "true";
-// Use ozone-platform=headless for headless GPU rendering (works without X11)
-const STREAM_CAPTURE_OZONE_HEADLESS =
-  process.env.STREAM_CAPTURE_OZONE_HEADLESS?.toLowerCase() === "true";
 const ANGLE_BACKEND =
   process.env.STREAM_CAPTURE_ANGLE?.trim() ||
   (process.platform === "darwin" ? "metal" : "vulkan");
+const STREAM_CAPTURE_DISABLE_WEBGPU = /^(1|true|yes|on)$/i.test(
+  process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "",
+);
+if (STREAM_CAPTURE_DISABLE_WEBGPU) {
+  throw new Error(
+    "STREAM_CAPTURE_DISABLE_WEBGPU is not supported. Hyperscape capture is WebGPU-only.",
+  );
+}
 const CDP_QUALITY = Math.min(
   100,
   Math.max(1, parseInt(process.env.STREAM_CDP_QUALITY || "80", 10)),
@@ -162,7 +141,7 @@ let page: Page | null = null;
 let cdpSession: CDPSession | null = null;
 let selectedGameUrl: string | null = null;
 let launchTime = Date.now();
-const BROWSER_RESTART_INTERVAL_MS = 45 * 60 * 1000; // 45 minutes (prevents WebGPU OOM)
+const BROWSER_RESTART_INTERVAL_MS = 1 * 60 * 60 * 1000; // 1 Hour
 const CAPTURE_RECOVERY_TIMEOUT_MS = Math.max(
   10_000,
   Number.parseInt(
@@ -173,9 +152,9 @@ const CAPTURE_RECOVERY_TIMEOUT_MS = Math.max(
 const CAPTURE_RECOVERY_MAX_FAILURES = Math.max(
   1,
   Number.parseInt(
-    process.env.STREAM_CAPTURE_RECOVERY_MAX_FAILURES || "4",
+    process.env.STREAM_CAPTURE_RECOVERY_MAX_FAILURES || "2",
     10,
-  ) || 4,
+  ) || 2,
 );
 
 // ── CDP Frame Rate Tracking ────────────────────────────────────────────────
@@ -184,11 +163,6 @@ let cdpFrameCount = 0;
 let cdpFps = 0;
 let cdpFpsIntervalId: ReturnType<typeof setInterval> | null = null;
 let cdpDroppedFrames = 0;
-let cdpLastFrameWidth = 0;
-let cdpLastFrameHeight = 0;
-let cdpResolutionMismatchCount = 0;
-/** Flag to suppress old CDP handlers during recovery */
-let cdpRecoveryModeActive = false;
 
 function startFpsTracking() {
   if (cdpFpsIntervalId) clearInterval(cdpFpsIntervalId);
@@ -319,16 +293,10 @@ async function waitForStreamReadiness(
 ): Promise<boolean> {
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
-  let probeCount = 0;
-
-  let consecutiveTimeouts = 0;
-  const MAX_CONSECUTIVE_TIMEOUTS = 5;
 
   while (Date.now() < deadline) {
-    probeCount++;
     try {
-      // Add 5s timeout to prevent hanging evaluate calls
-      const probePromise = pageRef.evaluate(() => {
+      const probe = await pageRef.evaluate(() => {
         const win = window as unknown as {
           __HYPERSCAPE_STREAM_READY__?: boolean;
         };
@@ -344,364 +312,52 @@ async function waitForStreamReadiness(
           hasCanvas: document.querySelector("canvas") !== null,
           readyFlag: win.__HYPERSCAPE_STREAM_READY__ === true,
           hasStreamingBootUi,
-          textPreview: text.slice(0, 200),
         };
       });
 
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Probe timeout (5s)")), 5000),
-      );
-
-      const probe = await Promise.race([probePromise, timeoutPromise]);
-      consecutiveTimeouts = 0; // Reset on success
-
-      // Log probe status every 10 seconds
-      if (probeCount % 10 === 0 || probeCount === 1) {
-        console.log(
-          `[Main] Stream readiness probe #${probeCount}: canvas=${probe.hasCanvas}, ready=${probe.readyFlag}, bootUi=${probe.hasStreamingBootUi}, text="${probe.textPreview.replace(/\n/g, " ").slice(0, 80)}..."`,
-        );
-      }
-
       if (probe.readyFlag) {
-        console.log("[Main] Stream ready via __HYPERSCAPE_STREAM_READY__ flag");
         return true;
       }
 
       // Allow capture once we have a canvas and the stream boot/loading UI has
       // cleared (the old gate accepted any canvas, which could lock us at 3%).
       if (probe.hasCanvas && !probe.hasStreamingBootUi) {
-        console.log("[Main] Stream ready via canvas detection (no boot UI)");
         return true;
       }
 
       // Hard fallback after sustained boot-screen presence to avoid deadlock.
       if (probe.hasStreamingBootUi && Date.now() - startedAt >= 180_000) {
-        console.log(
-          "[Main] Stream ready via 180s fallback (boot UI persisted)",
-        );
         return true;
       }
     } catch (err) {
-      const errMessage = errMsg(err);
-      const isTimeout =
-        errMessage.includes("timeout") || errMessage.includes("Timeout");
-
-      if (isTimeout) {
-        consecutiveTimeouts++;
-        console.warn(
-          `[Main] Stream readiness probe failed (timeout ${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS}): ${errMessage}`,
-        );
-
-        // If we get too many consecutive timeouts, assume the page is stuck
-        // and proceed with capture anyway (WebGPU might be blocking JS but still rendering)
-        if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
-          console.warn(
-            `[Main] Too many consecutive probe timeouts (${consecutiveTimeouts}). Proceeding with capture anyway...`,
-          );
-          return true;
-        }
-      } else if (!isTransientPageEvalError(err)) {
-        console.warn("[Main] Stream readiness probe failed:", errMessage);
+      if (!isTransientPageEvalError(err)) {
+        console.warn("[Main] Stream readiness probe failed:", errMsg(err));
       }
     }
 
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
 
-  console.warn(`[Main] Stream readiness timed out after ${timeoutMs}ms`);
   return false;
 }
 
 // ── Browser Launch ─────────────────────────────────────────────────────────
 
-/**
- * Quick WebGPU preflight test to detect initialization hangs.
- * Returns true if WebGPU initializes successfully within timeout.
- */
-async function testWebGpuInit(
-  testPage: Page,
-  timeoutMs: number = 15000,
-): Promise<{ success: boolean; error?: string; adapterInfo?: string }> {
-  console.log(
-    `[Main] Testing WebGPU initialization (timeout: ${timeoutMs}ms)...`,
-  );
-
-  try {
-    const result = await Promise.race([
-      testPage.evaluate(async () => {
-        try {
-          // Check if WebGPU API is available
-          if (!navigator.gpu) {
-            return { success: false, error: "navigator.gpu not available" };
-          }
-
-          // Try to get adapter
-          const adapter = await navigator.gpu.requestAdapter({
-            powerPreference: "high-performance",
-          });
-
-          if (!adapter) {
-            return { success: false, error: "Failed to get WebGPU adapter" };
-          }
-
-          // Try to get device
-          const device = await adapter.requestDevice();
-
-          if (!device) {
-            return { success: false, error: "Failed to get WebGPU device" };
-          }
-
-          // Get adapter info for diagnostics
-          // Use newer API if available, fall back to direct properties for older Chrome
-          let adapterInfo: string;
-          if (typeof adapter.requestAdapterInfo === "function") {
-            const info = await adapter.requestAdapterInfo();
-            adapterInfo = `${info.vendor || "unknown"} - ${info.architecture || "unknown"} (${info.description || "no description"})`;
-          } else {
-            // Older Chrome: use direct adapter properties
-            const features = adapter.features
-              ? Array.from(adapter.features).slice(0, 3).join(", ")
-              : "N/A";
-            adapterInfo = `adapter found (features: ${features})`;
-          }
-
-          // Clean up
-          device.destroy();
-
-          return { success: true, adapterInfo };
-        } catch (err) {
-          return {
-            success: false,
-            error: err instanceof Error ? err.message : String(err),
-          };
-        }
-      }),
-      new Promise<{ success: boolean; error: string }>((resolve) =>
-        setTimeout(
-          () =>
-            resolve({
-              success: false,
-              error: `WebGPU initialization timed out after ${timeoutMs}ms`,
-            }),
-          timeoutMs,
-        ),
-      ),
-    ]);
-
-    if (result.success) {
-      console.log(`[Main] ✅ WebGPU preflight PASSED: ${result.adapterInfo}`);
-    } else {
-      console.warn(`[Main] ⚠️ WebGPU preflight FAILED: ${result.error}`);
-    }
-
-    return result;
-  } catch (err) {
-    const error = errMsg(err);
-    console.warn(`[Main] ⚠️ WebGPU preflight error: ${error}`);
-    return { success: false, error };
-  }
-}
-
-/**
- * Capture GPU diagnostics from chrome://gpu to help debug WebGPU issues.
- * This runs a quick Chrome instance to dump GPU info.
- */
-async function captureGpuDiagnostics(): Promise<void> {
-  console.log("[Main] Capturing GPU diagnostics from chrome://gpu...");
-  console.log(
-    `[Main] Environment: DISPLAY=${process.env.DISPLAY}, ANGLE=${ANGLE_BACKEND}`,
-  );
-  console.log(
-    `[Main] VK_ICD_FILENAMES=${process.env.VK_ICD_FILENAMES || "(not set)"}`,
-  );
-
-  // Use same headless setting as main browser - WebGPU REQUIRES a display
-  // headless: true does NOT support WebGPU
-  const playwrightHeadless =
-    STREAM_CAPTURE_HEADLESS && !STREAM_CAPTURE_HEADLESS_NEW;
-
-  // Use Metal on macOS, Vulkan elsewhere
-  const diagFeatureFlags =
-    process.platform === "darwin"
-      ? "--enable-features=UseSkiaRenderer,WebGPU"
-      : "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
-
+async function launchCaptureBrowser() {
+  const featureFlags = "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
   const launchConfig = {
-    headless: playwrightHeadless,
-    ignoreDefaultArgs: ["--enable-unsafe-swiftshader"],
+    headless: STREAM_CAPTURE_HEADLESS,
     args: [
-      ...(STREAM_CAPTURE_HEADLESS_NEW ? ["--headless=new"] : []),
-      // CRITICAL: Sandbox bypass for container GPU access
-      "--no-sandbox",
-      "--disable-gpu-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      // GPU / WebGPU rendering
+      // GPU / WebGPU essentials
       "--use-gl=angle",
       `--use-angle=${ANGLE_BACKEND}`,
-      "--enable-unsafe-webgpu",
-      diagFeatureFlags,
-      "--ignore-gpu-blocklist",
-      "--disable-software-rasterizer",
-      "--disable-gpu-driver-bug-workarounds",
-    ],
-    env: {
-      ...process.env,
-      // Ensure Vulkan ICD is explicitly set (Linux/Windows only)
-      ...(process.platform !== "darwin" && {
-        VK_ICD_FILENAMES:
-          process.env.VK_ICD_FILENAMES ||
-          "/usr/share/vulkan/icd.d/nvidia_icd.json",
-      }),
-    },
-  };
-
-  let diagBrowser: Browser | null = null;
-  try {
-    // Try to get the same browser that will be used for streaming
-    if (STREAM_CAPTURE_EXECUTABLE) {
-      diagBrowser = await chromium.launch({
-        ...launchConfig,
-        executablePath: STREAM_CAPTURE_EXECUTABLE,
-      });
-    } else if (STREAM_CAPTURE_CHANNEL) {
-      diagBrowser = await chromium.launch({
-        ...launchConfig,
-        channel: STREAM_CAPTURE_CHANNEL,
-      });
-    } else {
-      diagBrowser = await chromium.launch(launchConfig);
-    }
-
-    const diagPage = await diagBrowser.newPage();
-    await diagPage.goto("chrome://gpu", { timeout: 30000 });
-
-    // Wait for page to load
-    await diagPage.waitForTimeout(2000);
-
-    // Extract key GPU information
-    const gpuInfo = await diagPage.evaluate(() => {
-      const getText = (selector: string) =>
-        document.querySelector(selector)?.textContent?.trim() || "";
-
-      // Get all text content for analysis
-      const bodyText = document.body?.innerText || "";
-
-      // Look for key WebGPU-related strings
-      const hasWebGpu = bodyText.includes("WebGPU");
-      const hasVulkan = bodyText.includes("Vulkan");
-      const hasHardwareAcceleration = bodyText.includes("Hardware accelerated");
-
-      // Try to extract feature status
-      const featureStatusMatch = bodyText.match(
-        /WebGPU[:\s]*(Hardware accelerated|Software only|Disabled|Unavailable|Blocked)/i,
-      );
-
-      return {
-        webgpuStatus: featureStatusMatch
-          ? featureStatusMatch[1]
-          : hasWebGpu
-            ? "Present"
-            : "Not found",
-        hasVulkan,
-        hasHardwareAcceleration,
-        // Get first 3000 chars of text for debugging
-        textPreview: bodyText.slice(0, 3000),
-      };
-    });
-
-    console.log("[GPU Diagnostics] ═══════════════════════════════════════");
-    console.log(`[GPU Diagnostics] WebGPU Status: ${gpuInfo.webgpuStatus}`);
-    console.log(`[GPU Diagnostics] Vulkan Support: ${gpuInfo.hasVulkan}`);
-    console.log(
-      `[GPU Diagnostics] HW Acceleration: ${gpuInfo.hasHardwareAcceleration}`,
-    );
-    console.log("[GPU Diagnostics] ═══════════════════════════════════════");
-
-    // Log detailed info if WebGPU is not hardware accelerated
-    if (
-      gpuInfo.webgpuStatus !== "Hardware accelerated" &&
-      gpuInfo.webgpuStatus !== "Present"
-    ) {
-      console.warn("[GPU Diagnostics] ⚠️ WebGPU may not be working properly!");
-      console.warn(
-        "[GPU Diagnostics] Text preview:",
-        gpuInfo.textPreview.slice(0, 1500),
-      );
-    }
-
-    await diagPage.close();
-    await diagBrowser.close();
-    diagBrowser = null;
-  } catch (err) {
-    console.warn("[GPU Diagnostics] Failed to capture GPU info:", errMsg(err));
-  } finally {
-    if (diagBrowser) {
-      await diagBrowser.close().catch(() => {});
-    }
-  }
-}
-
-async function launchCaptureBrowser() {
-  // WebGPU is REQUIRED - configure Chrome for optimal WebGPU support
-  // Use Metal on macOS, Vulkan elsewhere
-  const featureFlags =
-    process.platform === "darwin"
-      ? "--enable-features=UseSkiaRenderer,WebGPU"
-      : "--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan,UseSkiaRenderer,WebGPU";
-
-  // Use ANGLE with Metal on macOS, Vulkan elsewhere
-  const glArgs = ["--use-gl=angle", `--use-angle=${ANGLE_BACKEND}`];
-
-  // Dawn-specific flags for container GPU access
-  const dawnArgs = [
-    "--enable-dawn-features=allow_unsafe_apis,disable_blob_cache",
-  ];
-
-  // Headless mode configuration
-  // NOTE: WebGPU requires a display (Xorg or Xvfb) - pure headless won't work
-  // Playwright's headless option only accepts boolean
-  const playwrightHeadless =
-    STREAM_CAPTURE_HEADLESS && !STREAM_CAPTURE_HEADLESS_NEW;
-
-  if (STREAM_CAPTURE_HEADLESS && !process.env.DISPLAY) {
-    console.warn(
-      "[Main] WARNING: Headless mode requested but WebGPU requires a display (Xorg/Xvfb)",
-    );
-  }
-
-  // Ozone platform for headless GPU rendering (works without X11)
-  const ozoneArgs = STREAM_CAPTURE_OZONE_HEADLESS
-    ? ["--ozone-platform=headless"]
-    : [];
-
-  const launchConfig = {
-    headless: playwrightHeadless,
-    // Ignore Playwright's SwiftShader default which conflicts with GPU rendering
-    ignoreDefaultArgs: ["--enable-unsafe-swiftshader"],
-    args: [
-      // Ozone headless platform (if set) - enables GPU without X11
-      ...ozoneArgs,
-      // Chrome's new headless mode (if requested) - must be passed as arg, not option
-      ...(STREAM_CAPTURE_HEADLESS_NEW ? ["--headless=new"] : []),
-      // GPU / WebGPU essentials - WebGPU is REQUIRED
-      ...glArgs,
-      ...dawnArgs,
+      "--enable-webgl",
       "--enable-unsafe-webgpu",
       featureFlags,
       "--ignore-gpu-blocklist",
       "--enable-gpu-rasterization",
-      "--use-cmd-decoder=passthrough",
-      // Force hardware GPU rendering - disable software fallbacks
-      "--disable-software-rasterizer",
-      "--disable-gpu-driver-bug-workarounds",
-      "--enable-accelerated-2d-canvas",
-      "--enable-gpu-compositing",
-      "--enable-native-gpu-memory-buffers",
-      // Sandbox & stability - CRITICAL: disable GPU sandbox for container GPU access
+      // Sandbox & stability
       "--no-sandbox",
-      "--disable-gpu-sandbox",
-      "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-web-security",
       "--autoplay-policy=no-user-gesture-required",
@@ -710,66 +366,8 @@ async function launchCaptureBrowser() {
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
       "--disable-hang-monitor",
-      // Force continuous rendering - don't skip frames
-      "--disable-frame-rate-limit",
-      // Audio output - use PulseAudio virtual sink for capture
-      "--alsa-output-device=pulse",
-      "--audio-output-channels=2",
     ],
-    // Set environment for PulseAudio
-    env: {
-      ...process.env,
-      PULSE_SERVER: "unix:/run/pulse/native",
-      PULSE_SINK: "chrome_audio",
-    },
   };
-
-  // Log critical environment for WebGPU debugging
-  console.log(`[Main] Browser launch config:`);
-  console.log(`  - DISPLAY: ${process.env.DISPLAY || "(not set)"}`);
-  console.log(`  - STREAM_CAPTURE_HEADLESS: ${STREAM_CAPTURE_HEADLESS}`);
-  console.log(
-    `  - STREAM_CAPTURE_EXECUTABLE: ${STREAM_CAPTURE_EXECUTABLE || "(not set)"}`,
-  );
-  console.log(
-    `  - STREAM_CAPTURE_CHANNEL: ${STREAM_CAPTURE_CHANNEL || "(not set)"}`,
-  );
-  console.log(`  - playwrightHeadless: ${playwrightHeadless}`);
-  console.log(
-    `  - VK_ICD_FILENAMES: ${process.env.VK_ICD_FILENAMES || "(not set)"}`,
-  );
-
-  // Try explicit executable first (most reliable for WebGPU)
-  if (STREAM_CAPTURE_EXECUTABLE) {
-    if (fs.existsSync(STREAM_CAPTURE_EXECUTABLE)) {
-      console.log(
-        `[Main] Launching with explicit executable: ${STREAM_CAPTURE_EXECUTABLE}`,
-      );
-      return await chromium.launch({
-        ...launchConfig,
-        executablePath: STREAM_CAPTURE_EXECUTABLE,
-      });
-    } else {
-      console.warn(
-        `[Main] Executable not found: ${STREAM_CAPTURE_EXECUTABLE}, trying alternatives...`,
-      );
-      // Try common Chrome Dev locations
-      const alternatives = [
-        "/usr/bin/google-chrome-unstable",
-        "/opt/google/chrome-unstable/google-chrome-unstable",
-        "/usr/bin/google-chrome",
-      ];
-      for (const alt of alternatives) {
-        if (fs.existsSync(alt)) {
-          console.log(`[Main] Found alternative: ${alt}`);
-          return await chromium.launch({
-            ...launchConfig,
-            executablePath: alt,
-          });
-        }
-      }
-    }
-  }
 
   if (STREAM_CAPTURE_CHANNEL) {
     console.log(
@@ -779,33 +377,6 @@ async function launchCaptureBrowser() {
       ...launchConfig,
       channel: STREAM_CAPTURE_CHANNEL,
     });
-  }
-
-  // On macOS, Playwright's bundled Chromium doesn't have WebGPU support.
-  // Try to use Chrome first for proper WebGPU support.
-  if (process.platform === "darwin") {
-    const macChromePaths = [
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-      "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    ];
-    for (const chromePath of macChromePaths) {
-      if (fs.existsSync(chromePath)) {
-        console.log(
-          `[Main] macOS: Using Chrome for WebGPU support: ${chromePath}`,
-        );
-        return await chromium.launch({
-          ...launchConfig,
-          executablePath: chromePath,
-        });
-      }
-    }
-    console.warn(
-      "[Main] macOS: Chrome not found at standard locations. WebGPU may not work with bundled Chromium.",
-    );
-    console.warn(
-      "[Main] Install Chrome or set STREAM_CAPTURE_EXECUTABLE=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    );
   }
 
   try {
@@ -846,21 +417,8 @@ async function launchCaptureBrowser() {
 async function setupBrowser() {
   if (browser) await cleanup();
 
-  // Capture GPU diagnostics before launching main browser
-  // This helps debug WebGPU issues on remote GPU servers
-  await captureGpuDiagnostics();
-
-  const glMode = STREAM_CAPTURE_USE_EGL ? "egl" : `angle/${ANGLE_BACKEND}`;
-  const headlessMode = STREAM_CAPTURE_HEADLESS_NEW
-    ? "new"
-    : STREAM_CAPTURE_HEADLESS;
-  const browserInfo = STREAM_CAPTURE_EXECUTABLE
-    ? `exec=${STREAM_CAPTURE_EXECUTABLE}`
-    : STREAM_CAPTURE_CHANNEL
-      ? `channel=${STREAM_CAPTURE_CHANNEL}`
-      : "bundled";
   console.log(
-    `[Main] Launching browser (headless=${headlessMode}, gl=${glMode}, ${browserInfo}, mode=${CAPTURE_MODE})...`,
+    `[Main] Launching browser (headless=${STREAM_CAPTURE_HEADLESS}, angle=${ANGLE_BACKEND}${STREAM_CAPTURE_CHANNEL ? `, channel=${STREAM_CAPTURE_CHANNEL}` : ""}, mode=${CAPTURE_MODE})...`,
   );
   browser = await launchCaptureBrowser();
 
@@ -926,41 +484,11 @@ async function setupBrowser() {
   });
 
   if (!selectedGameUrl) {
-    // First, do a quick WebGPU preflight test
-    // CRITICAL: WebGPU requires a secure context (HTTPS or localhost)
-    // about:blank is NOT a secure context, so navigator.gpu is undefined there
-    // We test on the first game URL candidate (localhost) which IS a secure context
-    const preflightUrl = GAME_URL_CANDIDATES[0] || "http://127.0.0.1:3333/";
-    console.log(`[Main] Running WebGPU preflight test on ${preflightUrl}...`);
-    try {
-      await page.goto(preflightUrl, {
-        timeout: 30000,
-        waitUntil: "domcontentloaded",
-      });
-      const webgpuTest = await testWebGpuInit(page, 20000);
-
-      if (!webgpuTest.success) {
-        console.error("[Main] ❌ WebGPU PREFLIGHT FAILED:", webgpuTest.error);
-        console.error(
-          "[Main] WebGPU is REQUIRED but failed to initialize. Possible causes:",
-        );
-        console.error("  - GPU driver issues or missing Vulkan support");
-        console.error("  - Chrome WebGPU disabled or blocked");
-        console.error("  - Display/Xvfb configuration issues");
-        console.error(
-          "[Main] Will attempt to proceed anyway (game may hang or fail)...",
-        );
-      }
-    } catch (err) {
-      console.warn("[Main] WebGPU preflight test error:", errMsg(err));
-    }
-
     for (const candidateUrl of GAME_URL_CANDIDATES) {
       console.log(`[Main] Navigating to ${candidateUrl}...`);
       try {
-        // Use longer timeout for Vite dev mode (180s) - production builds are faster
         await page.goto(candidateUrl, {
-          timeout: 180_000,
+          timeout: 120_000,
           waitUntil: "domcontentloaded",
         });
       } catch (err) {
@@ -981,7 +509,7 @@ async function setupBrowser() {
   } else {
     try {
       await page.goto(selectedGameUrl, {
-        timeout: 180_000,
+        timeout: 120_000,
         waitUntil: "domcontentloaded",
       });
     } catch (err) {
@@ -1029,49 +557,7 @@ async function startCdpCapture(bridge: ReturnType<typeof getRTMPBridge>) {
 
   // Handle incoming frames from CDP
   cdpSession.on("Page.screencastFrame", async (params) => {
-    // Skip if we're in recovery mode (old session handler may still fire briefly)
-    if (cdpRecoveryModeActive) return;
-
-    const { sessionId, data: base64Data, metadata } = params;
-
-    // Track frame dimensions from CDP metadata
-    if (metadata) {
-      const { deviceWidth, deviceHeight } = metadata;
-      if (deviceWidth && deviceHeight) {
-        // Detect resolution changes
-        if (
-          cdpLastFrameWidth !== deviceWidth ||
-          cdpLastFrameHeight !== deviceHeight
-        ) {
-          const wasWrongSize =
-            cdpLastFrameWidth > 0 &&
-            (cdpLastFrameWidth !== VIEWPORT.width ||
-              cdpLastFrameHeight !== VIEWPORT.height);
-          cdpLastFrameWidth = deviceWidth;
-          cdpLastFrameHeight = deviceHeight;
-
-          // Log dimension changes
-          const matches =
-            deviceWidth === VIEWPORT.width && deviceHeight === VIEWPORT.height;
-          if (!matches) {
-            cdpResolutionMismatchCount++;
-            if (
-              cdpResolutionMismatchCount <= 3 ||
-              cdpResolutionMismatchCount % 100 === 0
-            ) {
-              console.warn(
-                `[CDP] Resolution mismatch: got ${deviceWidth}x${deviceHeight}, expected ${VIEWPORT.width}x${VIEWPORT.height} (count: ${cdpResolutionMismatchCount})`,
-              );
-            }
-          } else if (wasWrongSize) {
-            console.log(
-              `[CDP] Resolution restored: ${deviceWidth}x${deviceHeight} ✓`,
-            );
-            cdpResolutionMismatchCount = 0;
-          }
-        }
-      }
-    }
+    const { sessionId, data: base64Data } = params;
 
     // Acknowledge the frame immediately to request the next one
     try {
@@ -1448,42 +934,9 @@ async function main() {
     );
 
     if (activeCaptureMode === "cdp") {
-      const resInfo =
-        cdpLastFrameWidth > 0
-          ? `${cdpLastFrameWidth}x${cdpLastFrameHeight}${cdpLastFrameWidth !== VIEWPORT.width || cdpLastFrameHeight !== VIEWPORT.height ? " (MISMATCH!)" : ""}`
-          : "unknown";
       console.log(
-        `[Stream Health] CDP FPS: ${cdpFps} | Resolution: ${resInfo} | Frames: ${bridge.getDirectFrameCount()} | Dropped: ${cdpDroppedFrames} | BridgeDrops: ${stats.droppedFrames} | Backpressure: ${stats.backpressured ? "ON" : "off"}`,
+        `[Stream Health] CDP FPS: ${cdpFps} | Frames: ${bridge.getDirectFrameCount()} | Dropped: ${cdpDroppedFrames} | BridgeDrops: ${stats.droppedFrames} | Backpressure: ${stats.backpressured ? "ON" : "off"}`,
       );
-
-      // Auto-recover viewport if resolution is consistently wrong (e.g., window minimized)
-      const hasMismatch =
-        cdpLastFrameWidth > 0 &&
-        (cdpLastFrameWidth !== VIEWPORT.width ||
-          cdpLastFrameHeight !== VIEWPORT.height);
-      if (
-        hasMismatch &&
-        cdpResolutionMismatchCount >= 10 &&
-        !cdpRecoveryInFlight
-      ) {
-        console.warn(
-          `[Main] Persistent resolution mismatch (${cdpResolutionMismatchCount} frames). Attempting viewport fix...`,
-        );
-        cdpResolutionMismatchCount = 0;
-        // Try to fix viewport size via Playwright
-        if (page && !page.isClosed()) {
-          page
-            .setViewportSize(VIEWPORT)
-            .then(() => {
-              console.log(
-                `[Main] Viewport resized to ${VIEWPORT.width}x${VIEWPORT.height}`,
-              );
-            })
-            .catch((err) => {
-              console.warn("[Main] Failed to resize viewport:", errMsg(err));
-            });
-        }
-      }
 
       // CDP can occasionally stall after initial page setup on remote GPU stacks.
       // Detect sustained no-traffic periods and recover automatically.
@@ -1496,7 +949,7 @@ async function main() {
         cdpStalledIntervals += 1;
       }
 
-      if (cdpStalledIntervals >= 4) {
+      if (cdpStalledIntervals >= 2) {
         if (cdpRecoveryInFlight) {
           console.warn(
             "[Main] CDP recovery already in progress; skipping duplicate stall recovery attempt.",
@@ -1506,113 +959,34 @@ async function main() {
         }
 
         console.warn(
-          `[Main] CDP capture stalled (${cdpStalledIntervals} intervals without traffic). Attempting soft recovery...`,
+          `[Main] CDP capture stalled (${cdpStalledIntervals} intervals without traffic). Attempting recovery...`,
         );
         cdpStalledIntervals = 0;
         cdpRecoveryInFlight = true;
 
         let recovered = false;
         try {
-          // Soft recovery: restart CDP screencast without killing browser or FFmpeg
-          // Set recovery mode to suppress old handler's frames during transition
-          cdpRecoveryModeActive = true;
           await withTimeout(
             (async () => {
-              if (cdpSession) {
-                try {
-                  await cdpSession.send("Page.stopScreencast");
-                } catch {
-                  // Session may be stale
-                }
-              }
-              // Re-create CDP session on the existing page
-              if (page && !page.isClosed()) {
-                if (cdpSession) {
-                  try {
-                    await cdpSession.detach();
-                  } catch {
-                    /* ignore */
-                  }
-                  cdpSession = null;
-                }
-                // Small delay to ensure old session is fully cleaned up
-                await new Promise((r) => setTimeout(r, 100));
-
-                cdpSession = await page.context().newCDPSession(page);
-                await cdpSession.send("Page.startScreencast", {
-                  format: "jpeg",
-                  quality: CDP_QUALITY,
-                  maxWidth: VIEWPORT.width,
-                  maxHeight: VIEWPORT.height,
-                  everyNthFrame: 1,
-                });
-                cdpSession.on("Page.screencastFrame", async (params) => {
-                  // Skip if we're still in recovery mode transition
-                  if (cdpRecoveryModeActive) return;
-
-                  const { sessionId, data: base64Data, metadata } = params;
-                  // Track frame dimensions after recovery
-                  if (metadata?.deviceWidth && metadata?.deviceHeight) {
-                    cdpLastFrameWidth = metadata.deviceWidth;
-                    cdpLastFrameHeight = metadata.deviceHeight;
-                  }
-                  try {
-                    await cdpSession?.send("Page.screencastFrameAck", {
-                      sessionId,
-                    });
-                  } catch {
-                    /* ignore */
-                  }
-                  const jpegBuffer = Buffer.from(base64Data, "base64");
-                  const written = bridge.feedFrame(jpegBuffer);
-                  if (written) cdpFrameCount++;
-                  else cdpDroppedFrames++;
-                });
-                // Clear recovery mode after new handler is set up
-                cdpRecoveryModeActive = false;
-              } else {
-                throw new Error("Page is closed, need hard recovery");
-              }
+              await stopCdpCapture();
+              await setupBrowser();
+              await startCdpCapture(bridge);
             })(),
             CAPTURE_RECOVERY_TIMEOUT_MS,
-            "CDP soft restart",
+            "CDP restart",
           );
           recovered = true;
           cdpRecoveryFailures = 0;
-          bridge.resetRestartAttempts();
           lastCdpBytesReceived = bridge.getStats().bytesReceived;
-          console.log("[Main] CDP soft recovery successful (no stream gap)");
-        } catch (softErr) {
+          console.log("[Main] CDP capture restarted successfully");
+        } catch (err) {
+          cdpRecoveryFailures += 1;
           console.warn(
-            `[Main] Soft CDP recovery failed: ${errMsg(softErr)}. Trying hard recovery...`,
+            `[Main] CDP restart failed (${cdpRecoveryFailures}/${CAPTURE_RECOVERY_MAX_FAILURES}):`,
+            errMsg(err),
           );
-          // Hard recovery: full browser teardown and restart
-          try {
-            await withTimeout(
-              (async () => {
-                await stopCdpCapture();
-                await setupBrowser();
-                await startCdpCapture(bridge);
-              })(),
-              CAPTURE_RECOVERY_TIMEOUT_MS,
-              "CDP hard restart",
-            );
-            recovered = true;
-            cdpRecoveryFailures = 0;
-            bridge.resetRestartAttempts();
-            lastCdpBytesReceived = bridge.getStats().bytesReceived;
-            console.log("[Main] CDP hard recovery successful");
-          } catch (hardErr) {
-            cdpRecoveryFailures += 1;
-            console.warn(
-              `[Main] CDP hard restart failed (${cdpRecoveryFailures}/${CAPTURE_RECOVERY_MAX_FAILURES}):`,
-              errMsg(hardErr),
-            );
-          }
         } finally {
           cdpRecoveryInFlight = false;
-          // Always clear recovery mode to allow frame processing
-          cdpRecoveryModeActive = false;
         }
 
         if (
@@ -1623,6 +997,11 @@ async function main() {
             "[Main] Falling back to MediaRecorder capture mode after CDP stall.",
           );
           try {
+            // Clear any existing watchdog before starting a new one.
+            if (captureWatchdog) {
+              clearInterval(captureWatchdog);
+              captureWatchdog = null;
+            }
             await withTimeout(
               stopCdpCapture(),
               5_000,
@@ -1669,23 +1048,34 @@ async function main() {
 
     // Check for periodic restart to clear memory leaks
     if (Date.now() - launchTime > BROWSER_RESTART_INTERVAL_MS) {
-      console.log(
-        "[Main] 🔄 Scheduled browser rotation to prevent WebGPU memory leaks.",
-      );
-      try {
-        if (activeCaptureMode === "cdp") {
-          await stopCdpCapture();
-        } else {
-          await stopInPageCaptureControl();
+      // Guard: skip rotation if a CDP recovery is already in flight.
+      if (cdpRecoveryInFlight) {
+        console.warn(
+          "[Main] Skipping scheduled browser rotation — CDP recovery in progress.",
+        );
+      } else {
+        console.log(
+          "[Main] 🔄 Scheduled browser rotation to prevent WebGL memory leaks.",
+        );
+        try {
+          if (activeCaptureMode === "cdp") {
+            await stopCdpCapture();
+          } else {
+            if (captureWatchdog) {
+              clearInterval(captureWatchdog);
+              captureWatchdog = null;
+            }
+            await stopInPageCaptureControl();
+          }
+          await setupBrowser();
+          if (activeCaptureMode === "cdp") {
+            await startCdpCapture(bridge);
+          } else if (activeCaptureMode === "mediarecorder") {
+            captureWatchdog = (await startLegacyCapture(bridge)) ?? null;
+          }
+        } catch (err) {
+          console.error("[Main] Failed to rotate browser!", err);
         }
-        await setupBrowser();
-        if (activeCaptureMode === "cdp") {
-          await startCdpCapture(bridge);
-        } else if (activeCaptureMode === "webcodecs") {
-          // Watchdog will automatically inject script on new page
-        }
-      } catch (err) {
-        console.error("[Main] Failed to rotate browser!", err);
       }
     }
   }, 30000);
@@ -1700,6 +1090,20 @@ async function main() {
     getRTMPBridge().stop();
     clearExternalStatusSnapshot();
     await cleanup();
+
+    // Final leak report: print and validate that no timers were orphaned.
+    const diag = getStreamLeakDiagnostics();
+    if (diag) {
+      diag.printReport();
+      try {
+        diag.assertNoLeaks("after shutdown");
+        console.log("[StreamLeakDiagnostics] ✅ No timer leaks detected.");
+      } catch (leakErr) {
+        console.error(String(leakErr));
+      }
+      diag.uninstall();
+    }
+
     process.exit(0);
   };
 

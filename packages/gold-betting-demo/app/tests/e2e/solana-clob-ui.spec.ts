@@ -133,6 +133,40 @@ async function ensureWalletConnected(page: Page): Promise<void> {
   });
 }
 
+async function switchToSolanaChain(page: Page): Promise<void> {
+  const chainSelectors = page.locator("#chain-selector");
+  const selectorCount = await chainSelectors.count();
+  for (let index = 0; index < selectorCount; index += 1) {
+    const selector = chainSelectors.nth(index);
+    if (!(await selector.isVisible().catch(() => false))) continue;
+
+    const values = await selector
+      .locator("option")
+      .evaluateAll((options) =>
+        options.map((option) => option.getAttribute("value") || ""),
+      );
+    const solanaValue =
+      values.find((value) => value.toLowerCase().includes("sol")) || "solana";
+    await selector.selectOption(solanaValue);
+    await expect(selector).toHaveValue(solanaValue);
+    return;
+  }
+
+  const debugChainSelector = page.getByTestId("e2e-chain-select");
+  if (await debugChainSelector.isVisible().catch(() => false)) {
+    await debugChainSelector.selectOption("solana");
+    return;
+  }
+
+  const fallbackChainSelector = page.getByRole("combobox").first();
+  if (await fallbackChainSelector.isVisible().catch(() => false)) {
+    await fallbackChainSelector.selectOption({ label: /sol/i });
+    return;
+  }
+
+  throw new Error("Unable to locate a visible chain selector");
+}
+
 test("runs non-debug Solana CLOB UI E2E and validates txs", async ({
   page,
 }) => {
@@ -144,10 +178,7 @@ test("runs non-debug Solana CLOB UI E2E and validates txs", async ({
   );
 
   await page.goto("/");
-  const chainSelector = page.locator("#chain-selector");
-  if ((await chainSelector.count()) > 0) {
-    await chainSelector.selectOption("solana");
-  }
+  await switchToSolanaChain(page);
   const expandButton = page.locator('button[title="Expand panel"]').first();
   if (await expandButton.isVisible().catch(() => false)) {
     await expandButton.click();

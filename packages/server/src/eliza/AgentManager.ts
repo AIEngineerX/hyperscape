@@ -260,10 +260,10 @@ export class AgentManager {
   private world: World;
   private agents: Map<string, AgentInstance> = new Map();
   private isShuttingDown: boolean = false;
-  readonly behaviorTicker: AgentBehaviorTicker;
+  private readonly behaviorTicker: AgentBehaviorTicker;
   private readonly commandDispatcher: AgentCommandDispatcher;
-  /** Stored event handler reference for cleanup during shutdown */
-  private readonly combatDamageHandler: (data: unknown) => void;
+  private readonly combatDamageListener: (data: unknown) => void;
+  private worldListenerActive: boolean = false;
 
   constructor(world: World) {
     this.world = world;
@@ -276,13 +276,23 @@ export class AgentManager {
       this.agents.get(id),
     );
 
-    // Subscribe to combat events for chat reactions (store ref for cleanup)
-    this.combatDamageHandler = (data: unknown) => {
+    this.combatDamageListener = (data: unknown) => {
       this.behaviorTicker.handleCombatDamageDealt(data);
     };
-    this.world.on(EventType.COMBAT_DAMAGE_DEALT, this.combatDamageHandler);
+    this.world.on(EventType.COMBAT_DAMAGE_DEALT, this.combatDamageListener);
+    this.worldListenerActive = true;
 
     console.log("[AgentManager] Initialized with combat chat reactions");
+  }
+
+  /**
+   * Dispose long-lived world listeners.
+   * Used on shutdown and during manager replacement in dev/hot-reload flows.
+   */
+  dispose(): void {
+    if (!this.worldListenerActive) return;
+    this.world.off(EventType.COMBAT_DAMAGE_DEALT, this.combatDamageListener);
+    this.worldListenerActive = false;
   }
 
   // ─── LIFECYCLE ──────────────────────────────────────────────────────
@@ -322,6 +332,7 @@ export class AgentManager {
       startedAt: Date.now(),
       lastActivity: Date.now(),
       behaviorInterval: null,
+      behaviorStartTimeout: null,
       goal: null,
       questsAccepted: new Set(),
       currentTargetId: null,
@@ -748,9 +759,6 @@ export class AgentManager {
     this.isShuttingDown = true;
     console.log(`[AgentManager] Shutting down ${this.agents.size} agent(s)...`);
 
-    // Remove event listeners to prevent memory leaks
-    this.world.off(EventType.COMBAT_DAMAGE_DEALT, this.combatDamageHandler);
-
     const stopPromises: Promise<void>[] = [];
 
     for (const [characterId] of this.agents) {
@@ -766,6 +774,7 @@ export class AgentManager {
 
     await Promise.all(stopPromises);
 
+    this.dispose();
     this.agents.clear();
     console.log("[AgentManager] All agents shut down");
   }
@@ -787,5 +796,15 @@ export function getAgentManager(): AgentManager | null {
  * Set the global agent manager instance (called during startup)
  */
 export function setAgentManager(manager: AgentManager): void {
+  if (globalAgentManager && globalAgentManager !== manager) {
+    const staleManager = globalAgentManager;
+    void staleManager.shutdown().catch((err) => {
+      console.warn(
+        "[AgentManager] Failed to shutdown previous manager during replacement:",
+        errMsg(err),
+      );
+      staleManager.dispose();
+    });
+  }
   globalAgentManager = manager;
 }

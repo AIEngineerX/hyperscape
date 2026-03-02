@@ -5,17 +5,11 @@ import { fileURLToPath } from "node:url";
 import * as anchor from "@coral-xyz/anchor";
 import BN from "bn.js";
 import {
-  TOKEN_PROGRAM_ID,
-  createAccount,
-  createMint,
-  getAccount,
-  mintTo,
-} from "@solana/spl-token";
-import {
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
+  Transaction,
 } from "@solana/web3.js";
 
 type Strategy =
@@ -30,7 +24,6 @@ type Winner = "YES" | "NO";
 type Bettor = {
   wallet: Keypair;
   strategy: Strategy;
-  tokenAccount: PublicKey;
   initialBalance: bigint;
 };
 
@@ -50,11 +43,22 @@ const STRATEGIES: Strategy[] = [
   "highest_spread",
 ];
 
-const WALLET_COUNT = 40;
-const ROUNDS = 3;
-const INITIAL_GOLD = 1_000_000_000n;
+function parsePositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer (got: ${raw})`);
+  }
+  return parsed;
+}
+
+const WALLET_COUNT = parsePositiveIntEnv("SOLANA_NATIVE_SIM_WALLETS", 100);
+const ROUNDS = parsePositiveIntEnv("SOLANA_NATIVE_SIM_ROUNDS", 1);
 const BASE_ORDER_AMOUNT = 3_000_000n;
-const HOUSE_LIQUIDITY = 90_000_000n;
+const BETTOR_FUNDING = Math.floor(2 * LAMPORTS_PER_SOL);
+const TREASURY_FUNDING = Math.floor(0.1 * LAMPORTS_PER_SOL);
+const MARKET_MAKER_FUNDING = Math.floor(0.1 * LAMPORTS_PER_SOL);
 
 function createRng(seed: bigint): () => number {
   let state = seed;
@@ -67,12 +71,21 @@ function createRng(seed: bigint): () => number {
   };
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function clampPrice(price: number): number {
   return Math.max(1, Math.min(999, Math.floor(price)));
 }
 
 function toU64Bn(value: bigint): BN {
   return new BN(value.toString());
+}
+
+function normalizeAmount(value: bigint): bigint {
+  const rounded = (value / 1000n) * 1000n;
+  return rounded > 0n ? rounded : 1000n;
 }
 
 function pickWinner(rng: () => number): Winner {
@@ -86,7 +99,7 @@ function orderFromStrategy(
   rng: () => number,
 ): { isBuy: boolean; price: number; amount: bigint } {
   const amountBump = BigInt(Math.floor(rng() * 1_000_000));
-  const amount = BASE_ORDER_AMOUNT + amountBump;
+  const amount = normalizeAmount(BASE_ORDER_AMOUNT + amountBump);
 
   if (strategy === "always_winner") {
     return winner === "YES"
@@ -128,19 +141,54 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+function deriveUserBalancePda(
+  programId: PublicKey,
+  matchState: PublicKey,
+  user: PublicKey,
+): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("balance"), matchState.toBuffer(), user.toBuffer()],
+    programId,
+  )[0];
+}
+
+function deriveOrderPda(
+  programId: PublicKey,
+  matchState: PublicKey,
+  user: PublicKey,
+  orderId: BN,
+): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("order"),
+      matchState.toBuffer(),
+      user.toBuffer(),
+      orderId.toArrayLike(Buffer, "le", 8),
+    ],
+    programId,
+  )[0];
+}
+
 async function main() {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const workspaceDir = join(scriptDir, "..");
   const idlPath = join(workspaceDir, "target", "idl", "gold_clob_market.json");
 
   const rpcUrl = process.env.ANCHOR_PROVIDER_URL ?? "http://127.0.0.1:8899";
+  const wsUrl = process.env.ANCHOR_WS_URL;
   const walletPath =
     process.env.ANCHOR_WALLET ?? `${process.env.HOME}/.config/solana/id.json`;
 
   const authority = Keypair.fromSecretKey(
     Uint8Array.from(JSON.parse(readFileSync(walletPath, "utf8")) as number[]),
   );
-  const connection = new anchor.web3.Connection(rpcUrl, "confirmed");
+  const connection =
+    wsUrl !== undefined
+      ? new anchor.web3.Connection(rpcUrl, {
+          commitment: "confirmed",
+          wsEndpoint: wsUrl,
+        })
+      : new anchor.web3.Connection(rpcUrl, "confirmed");
   const wallet = new anchor.Wallet(authority);
   const provider = new anchor.AnchorProvider(connection, wallet, {
     commitment: "confirmed",
@@ -171,10 +219,65 @@ async function main() {
     return sig;
   }
 
+  async function recordWithRetries(
+    label: string,
+    signatureFactory: () => Promise<string>,
+    maxAttempts = 3,
+  ) {
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await record(signatureFactory());
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxAttempts) {
+          await sleep(150);
+        }
+      }
+    }
+    const reason =
+      lastError instanceof Error ? lastError.message : String(lastError);
+    throw new Error(`${label} failed after ${maxAttempts} attempts: ${reason}`);
+  }
+
   async function sendSol(to: PublicKey, lamports: number) {
-    const sig = await connection.requestAirdrop(to, lamports);
-    await connection.confirmTransaction(sig, "confirmed");
+    const tx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: authority.publicKey,
+        toPubkey: to,
+        lamports,
+      }),
+    );
+    const sig = await provider.sendAndConfirm(tx, []);
     signatures.push(sig);
+  }
+
+  async function fundWallets(recipients: PublicKey[], lamports: number) {
+    for (const group of chunk(recipients, 20)) {
+      const tx = new Transaction();
+      for (const recipient of group) {
+        tx.add(
+          SystemProgram.transfer({
+            fromPubkey: authority.publicKey,
+            toPubkey: recipient,
+            lamports,
+          }),
+        );
+      }
+      const sig = await provider.sendAndConfirm(tx, []);
+      signatures.push(sig);
+    }
+  }
+
+  async function getBalance(pubkey: PublicKey) {
+    return BigInt(await connection.getBalance(pubkey, "confirmed"));
+  }
+
+  async function nextOrderId(matchState: PublicKey) {
+    const state = (await program.account.matchState.fetch(matchState)) as {
+      nextOrderId: BN;
+    };
+    return new BN(state.nextOrderId.toString());
   }
 
   const [configPda] = PublicKey.findProgramAddressSync(
@@ -182,58 +285,39 @@ async function main() {
     programId,
   );
 
-  const goldMint = await createMint(
-    connection,
-    authority,
-    authority.publicKey,
-    null,
-    6,
-    undefined,
-    undefined,
-    TOKEN_PROGRAM_ID,
-  );
-
-  const treasuryOwner = Keypair.generate();
-  const marketMakerOwner = Keypair.generate();
+  const treasuryWallet = Keypair.generate();
+  const marketMakerWallet = Keypair.generate();
   await Promise.all([
-    sendSol(treasuryOwner.publicKey, Math.floor(0.2 * LAMPORTS_PER_SOL)),
-    sendSol(marketMakerOwner.publicKey, Math.floor(0.2 * LAMPORTS_PER_SOL)),
+    sendSol(treasuryWallet.publicKey, TREASURY_FUNDING),
+    sendSol(marketMakerWallet.publicKey, MARKET_MAKER_FUNDING),
   ]);
 
-  const treasuryToken = await createAccount(
-    connection,
-    authority,
-    goldMint,
-    treasuryOwner.publicKey,
-    undefined,
-    undefined,
-    TOKEN_PROGRAM_ID,
-  );
-
-  const marketMakerToken = await createAccount(
-    connection,
-    authority,
-    goldMint,
-    marketMakerOwner.publicKey,
-    undefined,
-    undefined,
-    TOKEN_PROGRAM_ID,
-  );
-
-  await record(
+  await recordWithRetries("initialize-config", () =>
     program.methods
-      .initializeConfig(treasuryToken, marketMakerToken, 100, 100, 200)
-      .accountsStrict({
+      .initializeConfig(
+        treasuryWallet.publicKey,
+        marketMakerWallet.publicKey,
+        100,
+        100,
+        200,
+      )
+      .accountsPartial({
         authority: authority.publicKey,
         config: configPda,
         systemProgram: SystemProgram.programId,
       })
       .rpc(),
   ).catch(async () => {
-    await record(
+    await recordWithRetries("update-config", () =>
       program.methods
-        .updateConfig(treasuryToken, marketMakerToken, 100, 100, 200)
-        .accountsStrict({
+        .updateConfig(
+          treasuryWallet.publicKey,
+          marketMakerWallet.publicKey,
+          100,
+          100,
+          200,
+        )
+        .accountsPartial({
           authority: authority.publicKey,
           config: configPda,
         })
@@ -241,153 +325,45 @@ async function main() {
     );
   });
 
-  const treasuryStartBalance = (
-    await getAccount(connection, treasuryToken, "confirmed", TOKEN_PROGRAM_ID)
-  ).amount;
-  const mmStartBalance = (
-    await getAccount(
-      connection,
-      marketMakerToken,
-      "confirmed",
-      TOKEN_PROGRAM_ID,
-    )
-  ).amount;
+  const treasuryStartBalance = await getBalance(treasuryWallet.publicKey);
+  const mmStartBalance = await getBalance(marketMakerWallet.publicKey);
 
-  const houseBid = Keypair.generate();
-  const houseAsk = Keypair.generate();
-  await Promise.all([
-    sendSol(houseBid.publicKey, Math.floor(0.2 * LAMPORTS_PER_SOL)),
-    sendSol(houseAsk.publicKey, Math.floor(0.2 * LAMPORTS_PER_SOL)),
-  ]);
-
-  const houseBidToken = await createAccount(
-    connection,
-    authority,
-    goldMint,
-    houseBid.publicKey,
-    undefined,
-    undefined,
-    TOKEN_PROGRAM_ID,
+  const bettors: Bettor[] = Array.from({ length: WALLET_COUNT }, (_, i) => ({
+    wallet: Keypair.generate(),
+    strategy: STRATEGIES[i % STRATEGIES.length],
+    initialBalance: BigInt(BETTOR_FUNDING),
+  }));
+  await fundWallets(
+    bettors.map((bettor) => bettor.wallet.publicKey),
+    BETTOR_FUNDING,
   );
-  const houseAskToken = await createAccount(
-    connection,
-    authority,
-    goldMint,
-    houseAsk.publicKey,
-    undefined,
-    undefined,
-    TOKEN_PROGRAM_ID,
-  );
-
-  signatures.push(
-    await mintTo(
-      connection,
-      authority,
-      goldMint,
-      houseBidToken,
-      authority,
-      INITIAL_GOLD * 30n,
-      [],
-      undefined,
-      TOKEN_PROGRAM_ID,
-    ),
-  );
-  signatures.push(
-    await mintTo(
-      connection,
-      authority,
-      goldMint,
-      houseAskToken,
-      authority,
-      INITIAL_GOLD * 30n,
-      [],
-      undefined,
-      TOKEN_PROGRAM_ID,
-    ),
-  );
-
-  const bettors: Bettor[] = [];
-  for (let i = 0; i < WALLET_COUNT; i += 1) {
-    const walletKeypair = Keypair.generate();
-    await sendSol(walletKeypair.publicKey, Math.floor(0.2 * LAMPORTS_PER_SOL));
-
-    const tokenAccount = await createAccount(
-      connection,
-      authority,
-      goldMint,
-      walletKeypair.publicKey,
-      undefined,
-      undefined,
-      TOKEN_PROGRAM_ID,
-    );
-
-    signatures.push(
-      await mintTo(
-        connection,
-        authority,
-        goldMint,
-        tokenAccount,
-        authority,
-        INITIAL_GOLD,
-        [],
-        undefined,
-        TOKEN_PROGRAM_ID,
-      ),
-    );
-
-    bettors.push({
-      wallet: walletKeypair,
-      strategy: STRATEGIES[i % STRATEGIES.length],
-      tokenAccount,
-      initialBalance: (
-        await getAccount(
-          connection,
-          tokenAccount,
-          "confirmed",
-          TOKEN_PROGRAM_ID,
-        )
-      ).amount,
-    });
-  }
 
   for (let round = 1; round <= ROUNDS; round += 1) {
     const matchState = Keypair.generate();
     const orderBook = Keypair.generate();
-
-    const [vaultAuthority] = PublicKey.findProgramAddressSync(
-      [Buffer.from("vault_auth"), matchState.publicKey.toBuffer()],
+    const [vault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault"), matchState.publicKey.toBuffer()],
       programId,
     );
 
-    const vault = await createAccount(
-      connection,
-      authority,
-      goldMint,
-      vaultAuthority,
-      Keypair.generate(),
-      undefined,
-      undefined,
-      TOKEN_PROGRAM_ID,
-    );
-
-    await record(
+    await recordWithRetries("initialize-match", () =>
       program.methods
         .initializeMatch(500)
-        .accountsStrict({
+        .accountsPartial({
           matchState: matchState.publicKey,
           user: authority.publicKey,
           config: configPda,
-          vaultAuthority,
+          vault,
           systemProgram: SystemProgram.programId,
         })
         .signers([matchState])
         .rpc(),
     );
 
-    await record(
+    await recordWithRetries("initialize-order-book", () =>
       program.methods
         .initializeOrderBook()
-        .accountsStrict({
+        .accountsPartial({
           user: authority.publicKey,
           matchState: matchState.publicKey,
           orderBook: orderBook.publicKey,
@@ -397,114 +373,71 @@ async function main() {
         .rpc(),
     );
 
+    // Ensure the vault PDA is rent-exempt before receiving small trade flows.
+    await sendSol(vault, Math.floor(0.05 * LAMPORTS_PER_SOL));
+
     const winner = pickWinner(rng);
     const houseBias: Winner = round % 2 === 0 ? "YES" : "NO";
-
-    await record(
-      program.methods
-        .placeOrder(true, 450, toU64Bn(HOUSE_LIQUIDITY))
-        .accountsStrict({
-          matchState: matchState.publicKey,
-          orderBook: orderBook.publicKey,
-          config: configPda,
-          userTokenAccount: houseBidToken,
-          treasuryTokenAccount: treasuryToken,
-          marketMakerTokenAccount: marketMakerToken,
-          vault,
-          vaultAuthority,
-          user: houseBid.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .signers([houseBid])
-        .rpc(),
-    );
-
-    await record(
-      program.methods
-        .placeOrder(false, 550, toU64Bn(HOUSE_LIQUIDITY))
-        .accountsStrict({
-          matchState: matchState.publicKey,
-          orderBook: orderBook.publicKey,
-          config: configPda,
-          userTokenAccount: houseAskToken,
-          treasuryTokenAccount: treasuryToken,
-          marketMakerTokenAccount: marketMakerToken,
-          vault,
-          vaultAuthority,
-          user: houseAsk.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .signers([houseAsk])
-        .rpc(),
-    );
-
     let betsPlaced = 0;
+
     for (const bettor of bettors) {
       const order = orderFromStrategy(bettor.strategy, winner, houseBias, rng);
+
       executionStats.betAttempts += 1;
-      try {
-        await record(
-          program.methods
-            .placeOrder(order.isBuy, order.price, toU64Bn(order.amount))
-            .accountsStrict({
-              matchState: matchState.publicKey,
-              orderBook: orderBook.publicKey,
-              config: configPda,
-              userTokenAccount: bettor.tokenAccount,
-              treasuryTokenAccount: treasuryToken,
-              marketMakerTokenAccount: marketMakerToken,
-              vault,
-              vaultAuthority,
-              user: bettor.wallet.publicKey,
-              tokenProgram: TOKEN_PROGRAM_ID,
-            })
-            .signers([bettor.wallet])
-            .rpc(),
-        );
-        executionStats.betSuccess += 1;
-        betsPlaced += 1;
-      } catch {
-        executionStats.betFailures += 1;
-      }
+
+      const bettorOrderId = await nextOrderId(matchState.publicKey);
+      const userBalance = deriveUserBalancePda(
+        programId,
+        matchState.publicKey,
+        bettor.wallet.publicKey,
+      );
+      const newOrder = deriveOrderPda(
+        programId,
+        matchState.publicKey,
+        bettor.wallet.publicKey,
+        bettorOrderId,
+      );
+      await recordWithRetries("bettor-order", () =>
+        program.methods
+          .placeOrder(
+            bettorOrderId,
+            order.isBuy,
+            order.price,
+            toU64Bn(order.amount),
+          )
+          .accountsPartial({
+            matchState: matchState.publicKey,
+            orderBook: orderBook.publicKey,
+            userBalance,
+            newOrder,
+            config: configPda,
+            treasury: treasuryWallet.publicKey,
+            marketMaker: marketMakerWallet.publicKey,
+            vault,
+            user: bettor.wallet.publicKey,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([bettor.wallet])
+          .rpc(),
+      );
+
+      executionStats.betSuccess += 1;
+      betsPlaced += 1;
     }
 
-    await record(
+    const winnerArg =
+      winner === "YES" ? ({ yes: {} } as any) : ({ no: {} } as any);
+    await recordWithRetries("resolve-match", () =>
       program.methods
-        .resolveMatch(winner === "YES" ? 1 : 2)
-        .accountsStrict({
+        .resolveMatch(winnerArg)
+        .accountsPartial({
           matchState: matchState.publicKey,
           authority: authority.publicKey,
         })
         .rpc(),
     );
 
-    let winningClaims = 0;
-    for (const bettor of bettors) {
-      executionStats.claimAttempts += 1;
-      try {
-        await record(
-          program.methods
-            .claim()
-            .accountsStrict({
-              matchState: matchState.publicKey,
-              orderBook: orderBook.publicKey,
-              config: configPda,
-              userTokenAccount: bettor.tokenAccount,
-              marketMakerTokenAccount: marketMakerToken,
-              vault,
-              vaultAuthority,
-              user: bettor.wallet.publicKey,
-              tokenProgram: TOKEN_PROGRAM_ID,
-            })
-            .signers([bettor.wallet])
-            .rpc(),
-        );
-        executionStats.claimSuccess += 1;
-        winningClaims += 1;
-      } catch {
-        executionStats.claimFailures += 1;
-      }
-    }
+    const winningClaims = 0;
 
     roundSummaries.push({
       round,
@@ -517,14 +450,7 @@ async function main() {
 
   const walletPnl = [];
   for (const bettor of bettors) {
-    const finalBalance = (
-      await getAccount(
-        connection,
-        bettor.tokenAccount,
-        "confirmed",
-        TOKEN_PROGRAM_ID,
-      )
-    ).amount;
+    const finalBalance = await getBalance(bettor.wallet.publicKey);
     walletPnl.push({
       address: bettor.wallet.publicKey.toBase58(),
       strategy: bettor.strategy,
@@ -574,23 +500,13 @@ async function main() {
     }
   }
 
-  const treasuryEndBalance = (
-    await getAccount(connection, treasuryToken, "confirmed", TOKEN_PROGRAM_ID)
-  ).amount;
-  const mmEndBalance = (
-    await getAccount(
-      connection,
-      marketMakerToken,
-      "confirmed",
-      TOKEN_PROGRAM_ID,
-    )
-  ).amount;
+  const treasuryEndBalance = await getBalance(treasuryWallet.publicKey);
+  const mmEndBalance = await getBalance(marketMakerWallet.publicKey);
 
   const report = {
     generatedAt: new Date().toISOString(),
     rpcUrl,
     programId: programId.toBase58(),
-    mint: goldMint.toBase58(),
     wallets: WALLET_COUNT,
     rounds: ROUNDS,
     feeFlows: {
@@ -612,7 +528,7 @@ async function main() {
 
   const outputDir = join(workspaceDir, "simulations");
   mkdirSync(outputDir, { recursive: true });
-  const outputPath = join(outputDir, "solana-clob-localnet-pnl.json");
+  const outputPath = join(outputDir, "solana-localnet-pnl.json");
   writeFileSync(outputPath, JSON.stringify(report, null, 2));
 
   console.log("\n=== Solana CLOB Localnet Simulation Complete ===");

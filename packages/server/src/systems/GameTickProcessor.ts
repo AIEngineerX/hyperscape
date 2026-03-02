@@ -87,6 +87,7 @@ interface MobEntityInterface {
     update(context: unknown, deltaTime: number): void;
   };
   createAIContext?: () => unknown;
+  runAITick?: (deltaTime: number) => void;
   position?: { x: number; y: number; z: number };
 }
 
@@ -543,9 +544,16 @@ export class GameTickProcessor {
    * Our AIStateMachine handles this internally.
    */
   private processNPCAI(mob: MobEntityInterface, _tickNumber: number): void {
+    const deltaSeconds = TICK_DURATION_MS / 1000;
+
+    // Prefer mob-owned AI tick entrypoint to avoid duplicate per-tick updates.
+    if (mob.runAITick) {
+      mob.runAITick(deltaSeconds);
+      return;
+    }
+
     if (mob.aiStateMachine && mob.createAIContext) {
       const context = mob.createAIContext();
-      const deltaSeconds = TICK_DURATION_MS / 1000;
       mob.aiStateMachine.update(context, deltaSeconds);
     }
   }

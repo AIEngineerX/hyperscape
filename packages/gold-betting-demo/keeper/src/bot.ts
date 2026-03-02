@@ -242,14 +242,20 @@ async function updatePerpsOracle(agentId: string, rating: AgentRating) {
       perpsProgram.programId,
     )[0];
 
+    const vaultPda = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault")],
+      perpsProgram.programId,
+    )[0];
+
     await runWithRecovery(
       () =>
         perpsProgram.methods
           .updateOracle(numericAgentId, spotIndexScaled, muScaled, sigmaScaled)
-          // @ts-ignore - Anchor IDL resolves PDA accounts automatically
-          .accounts({
+          .accountsPartial({
             oracle: oraclePda,
+            vault: vaultPda,
             authority: botKeypair.publicKey,
+            systemProgram: SystemProgram.programId,
           })
           .rpc(),
       connection,

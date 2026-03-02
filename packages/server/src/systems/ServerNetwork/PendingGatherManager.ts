@@ -86,6 +86,8 @@ export class PendingGatherManager {
   /** Pre-allocated tile buffers (zero-allocation hot path) */
   private readonly _playerTile: TileCoord = { x: 0, z: 0 };
   private readonly _resourceTile: TileCoord = { x: 0, z: 0 };
+  /** Pre-allocated tile for footprint iteration to avoid per-check allocations */
+  private readonly _tempFootprintTile: TileCoord = { x: 0, z: 0 };
 
   constructor(
     world: World,
@@ -170,17 +172,26 @@ export class PendingGatherManager {
     currentTick: number,
     runMode?: boolean,
   ): void {
-    // Cancel any existing pending gather
-    this.cancelPendingGather(playerId);
-
-    // Look up resource using SERVER's authoritative data
+    // PERF: Skip if player is already gathering this exact resource (avoids object allocations)
     const resourceSystem = this.world.getSystem("resource") as {
       getResource?: (id: string) => ResourceData | null;
       playerHasRequiredToolForResource?: (
         playerId: string,
         resourceId: string,
       ) => boolean;
+      isPlayerGatheringResource?: (
+        playerId: string,
+        resourceId: string,
+      ) => boolean;
     } | null;
+
+    // Early out if already gathering same resource (prevents repeated event emissions)
+    if (resourceSystem?.isPlayerGatheringResource?.(playerId, resourceId)) {
+      return;
+    }
+
+    // Cancel any existing pending gather
+    this.cancelPendingGather(playerId);
 
     if (!resourceSystem?.getResource) {
       console.warn("[PendingGather] No resource system available");
@@ -221,15 +232,7 @@ export class PendingGatherManager {
       this._resourceTile,
     );
 
-    console.log(
-      `[PendingGather] SERVER-AUTHORITATIVE: Player ${playerId} wants to gather ${resourceId}${isFishing ? " (FISHING)" : ""}`,
-    );
-    console.log(
-      `[PendingGather]   Resource at anchor (${this._resourceTile.x}, ${this._resourceTile.z}), footprint ${size.x}x${size.z}`,
-    );
-    console.log(
-      `[PendingGather]   Player at tile (${this._playerTile.x}, ${this._playerTile.z})`,
-    );
+    // PERF: Reduced logging - only log on actual state changes, not every tick
 
     // FISHING: Find shore tile FIRST, then check if player is already there
     // OSRS behavior: Player ALWAYS walks to shore before fishing (not just "in range")
@@ -247,18 +250,12 @@ export class PendingGatherManager {
         return;
       }
 
-      console.log(
-        `[PendingGather]   🎣 Shore tile at (${shoreTile.x}, ${shoreTile.z}), player at (${this._playerTile.x}, ${this._playerTile.z})`,
-      );
-
       // Check if player is ALREADY on the shore tile (exact match, not distance)
       if (
         this._playerTile.x === shoreTile.x &&
         this._playerTile.z === shoreTile.z
       ) {
-        console.log(
-          `[PendingGather]   🎣 Already on shore tile - starting gather immediately`,
-        );
+        // PERF: Removed log - this happens every tick when agent spams gather
         this.setFaceTargetViaManager(
           playerId,
           this._resourceTile,
@@ -333,9 +330,7 @@ export class PendingGatherManager {
           size.z,
         )
       ) {
-        console.log(
-          `[PendingGather]   Already on cardinal tile - starting gather immediately`,
-        );
+        // PERF: Removed log - this happens every tick when agent spams gather
         this.setFaceTargetViaManager(
           playerId,
           this._resourceTile,
@@ -353,10 +348,6 @@ export class PendingGatherManager {
     // Use run mode from client if provided, otherwise fall back to server state
     const isRunning =
       runMode ?? this.tileMovementManager.getIsRunning(playerId);
-
-    console.log(
-      `[PendingGather]   Movement mode: ${isRunning ? "running" : "walking"} (from ${runMode !== undefined ? "client" : "server"})`,
-    );
 
     // CRITICAL: Set arrival emote BEFORE pathing (like fishing)
     // This bundles the emote with tileMovementEnd packet for atomic delivery
@@ -566,17 +557,16 @@ export class PendingGatherManager {
   ): boolean {
     // For multi-tile resources, we need to check all tiles the resource occupies
     // Player must be cardinally adjacent to ANY tile of the resource
+    // MEMORY FIX: Use pre-allocated tile to avoid per-iteration allocations
     for (let ox = 0; ox < footprintX; ox++) {
       for (let oz = 0; oz < footprintZ; oz++) {
-        const resourceTile = {
-          x: resourceAnchor.x + ox,
-          z: resourceAnchor.z + oz,
-        };
+        this._tempFootprintTile.x = resourceAnchor.x + ox;
+        this._tempFootprintTile.z = resourceAnchor.z + oz;
         // tilesWithinMeleeRange with GATHERING_RANGE checks cardinal-only
         if (
           tilesWithinMeleeRange(
             playerTile,
-            resourceTile,
+            this._tempFootprintTile,
             GATHERING_CONSTANTS.GATHERING_RANGE,
           )
         ) {
@@ -617,9 +607,7 @@ export class PendingGatherManager {
         footprintX,
         footprintZ,
       );
-      console.log(
-        `[PendingGather] 🧭 Set cardinal face target for ${playerId} via FaceDirectionManager`,
-      );
+      // PERF: Removed log - this happens every tick when agent spams gather
     }
   }
 

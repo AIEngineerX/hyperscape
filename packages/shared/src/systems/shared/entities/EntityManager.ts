@@ -134,6 +134,12 @@ export class EntityManager extends SystemBase {
   /** Frame when active entities were last cached */
   private _activeEntitiesCacheFrame = -1;
 
+  // OPTIMIZATION: Pre-allocated buffers for getEntitiesByType (avoids array allocation per call)
+  /** Cached arrays for each entity type - reused across calls */
+  private readonly _entitiesByTypeBuffers = new Map<string, Entity[]>();
+  /** Pre-allocated buffer for getInterestedPlayers (avoids allocation per call) */
+  private readonly _interestedPlayersBuffer: string[] = [];
+
   /** Network stats for monitoring interest filtering effectiveness */
   private networkStats = {
     interestFilteredUpdates: 0,
@@ -889,6 +895,10 @@ export class EntityManager extends SystemBase {
    * @param entityType - Optional entity type for type-specific distances
    * @returns Array of player IDs who should receive the update
    */
+  /**
+   * Get players who should receive updates about an entity at a given position.
+   * Returns a reusable internal buffer - callers must consume before the next call.
+   */
   getInterestedPlayers(
     entityX: number,
     entityZ: number,
@@ -908,7 +918,10 @@ export class EntityManager extends SystemBase {
 
     // Get all player positions
     const playerPositions = this.spatialRegistry.getPlayerPositions();
-    const interestedPlayers: string[] = [];
+
+    // PERF: Reuse buffer to avoid allocation per call
+    const interestedPlayers = this._interestedPlayersBuffer;
+    interestedPlayers.length = 0;
 
     // Check each player's distance to the entity
     for (const player of playerPositions) {
@@ -928,19 +941,29 @@ export class EntityManager extends SystemBase {
    * Get all entities of a specific type.
    * OPTIMIZATION: Uses type-indexed cache for O(n) where n = entities of that type,
    * instead of O(total entities) linear scan.
+   *
+   * Returns a reusable internal buffer - callers must consume before the next call
+   * with the same type. Do NOT store the returned array reference.
    */
   getEntitiesByType(type: string): Entity[] {
     const typeSet = this.entitiesByType.get(type);
     if (!typeSet || typeSet.size === 0) return [];
 
-    const entities: Entity[] = [];
+    // PERF: Reuse buffer per entity type to avoid allocation per call
+    let buffer = this._entitiesByTypeBuffers.get(type);
+    if (!buffer) {
+      buffer = [];
+      this._entitiesByTypeBuffers.set(type, buffer);
+    }
+    buffer.length = 0;
+
     for (const entityId of typeSet) {
       const entity = this.entities.get(entityId);
       if (entity) {
-        entities.push(entity);
+        buffer.push(entity);
       }
     }
-    return entities;
+    return buffer;
   }
 
   /**
@@ -2147,6 +2170,7 @@ export class EntityManager extends SystemBase {
     this.networkDirtyEntities.clear();
     this._entityArrayDirty = true; // Mark for cache refresh
     this._entityUpdateArray = []; // Clear cached array
+    this._entitiesByTypeBuffers.clear(); // Clear entity type buffers
 
     // Clear spatial registry
     this.spatialRegistry.clear();

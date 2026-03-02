@@ -28,6 +28,41 @@ function runStep(name, command, args, cwd) {
   });
 }
 
+function runBestEffort(command, args, cwd) {
+  return new Promise((resolveStep) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: "inherit",
+      env: process.env,
+    });
+    child.once("error", () => resolveStep());
+    child.once("exit", () => resolveStep());
+  });
+}
+
+async function cleanupLocalSolanaValidator() {
+  await runBestEffort(
+    "bash",
+    [
+      "-lc",
+      `
+for port in 8899 8900; do
+  pids=$(lsof -tiTCP:$port -sTCP:LISTEN || true)
+  if [[ -n "$pids" ]]; then
+    for pid in $pids; do
+      kill "$pid" >/dev/null 2>&1 || true
+    done
+  fi
+done
+pkill -f "solana-test-validator --ledger .anchor/test-ledger" >/dev/null 2>&1 || true
+pkill -f "anchor test" >/dev/null 2>&1 || true
+sleep 1
+`,
+    ],
+    ROOT,
+  );
+}
+
 async function main() {
   const evmDir = resolve(ROOT, "packages/evm-contracts");
   const solanaDir = resolve(ROOT, "packages/gold-betting-demo/anchor");
@@ -40,18 +75,21 @@ async function main() {
     evmDir,
   );
 
+  await cleanupLocalSolanaValidator();
   await runStep(
     "Solana tests (includes randomized invariants)",
     "bun",
     ["run", "test"],
     solanaDir,
   );
+  await cleanupLocalSolanaValidator();
   await runStep(
-    "Solana 100-wallet simulation",
+    "Solana localnet simulation",
     "bun",
     ["run", "simulate:localnet"],
     solanaDir,
   );
+  await cleanupLocalSolanaValidator();
 
   await runStep(
     "Simulation report verification",

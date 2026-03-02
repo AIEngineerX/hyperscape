@@ -20,7 +20,7 @@
   ],
   "scripts": {
     "dev": "vite",
-    "build": "rm -rf dist && tsc --project tsconfig.build.json && vite build --config vite.lib.config.ts",
+    "build": "tsc --project tsconfig.build.json && vite build --config vite.lib.config.ts",
     "build:demo": "tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

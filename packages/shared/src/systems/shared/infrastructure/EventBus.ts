@@ -54,8 +54,15 @@ interface PrioritizedHandler {
 export class EventBus extends EventEmitter {
   private subscriptionCounter = 0;
   private activeSubscriptions = new Map<string, EventSubscription>();
+
+  /** Circular buffer for event history (avoids O(n) shift operations) */
   private eventHistory: SystemEvent<AnyEvent>[] = [];
+  private historyWriteIndex = 0;
   private readonly maxHistorySize = 1000;
+
+  /** Disable history tracking for production performance (avoids per-emit allocations) */
+  private readonly disableHistory =
+    process.env.DISABLE_EVENT_HISTORY === "true";
 
   /**
    * Track pending async handlers for graceful shutdown
@@ -85,18 +92,37 @@ export class EventBus extends EventEmitter {
     data: T,
     source: string = "unknown",
   ): void {
-    const event: SystemEvent<T> = {
-      type: type as EventType,
-      data,
-      source,
-      timestamp: Date.now(),
-      id: `${source}-${type}-${++this.subscriptionCounter}`,
-    };
+    // PERF: Skip object creation when history is disabled (production mode)
+    // This saves ~3 allocations per emit: SystemEvent object, id string, array entry
+    let event: SystemEvent<T>;
 
-    // Add to history for debugging
-    this.eventHistory.push(event);
-    if (this.eventHistory.length > this.maxHistorySize) {
-      this.eventHistory.shift();
+    if (this.disableHistory) {
+      // Minimal event wrapper - reuse counter but skip history
+      ++this.subscriptionCounter;
+      event = {
+        type: type as EventType,
+        data,
+        source,
+        timestamp: Date.now(),
+        id: "", // Skip string allocation - not needed without history
+      };
+    } else {
+      event = {
+        type: type as EventType,
+        data,
+        source,
+        timestamp: Date.now(),
+        id: `${source}-${type}-${++this.subscriptionCounter}`,
+      };
+
+      // PERF: Circular buffer - O(1) instead of O(n) for shift()
+      if (this.eventHistory.length < this.maxHistorySize) {
+        this.eventHistory.push(event);
+      } else {
+        this.eventHistory[this.historyWriteIndex] = event;
+        this.historyWriteIndex =
+          (this.historyWriteIndex + 1) % this.maxHistorySize;
+      }
     }
 
     // Use priority-based dispatch if enabled and handlers exist
@@ -334,13 +360,26 @@ export class EventBus extends EventEmitter {
   }
 
   /**
-   * Get event history for debugging
+   * Get event history for debugging (returns events in chronological order)
    */
   getEventHistory(filterByType?: string): SystemEvent[] {
-    if (filterByType) {
-      return this.eventHistory.filter((event) => event.type === filterByType);
+    // Reconstruct chronological order from circular buffer
+    let orderedHistory: SystemEvent[];
+    if (this.eventHistory.length < this.maxHistorySize) {
+      // Buffer not full yet - already in order
+      orderedHistory = [...this.eventHistory];
+    } else {
+      // Buffer full - reconstruct order from write index
+      orderedHistory = [
+        ...this.eventHistory.slice(this.historyWriteIndex),
+        ...this.eventHistory.slice(0, this.historyWriteIndex),
+      ];
     }
-    return [...this.eventHistory];
+
+    if (filterByType) {
+      return orderedHistory.filter((event) => event.type === filterByType);
+    }
+    return orderedHistory;
   }
 
   /**

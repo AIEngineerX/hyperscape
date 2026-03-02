@@ -3070,6 +3070,21 @@ export class ResourceSystem extends SystemBase {
   }
 
   /**
+   * Check if a player is actively gathering a specific resource.
+   * Used to prevent repeated gather requests from creating unnecessary objects.
+   *
+   * @param playerId - The player ID
+   * @param resourceId - The resource ID to check
+   * @returns true if player is actively gathering this exact resource
+   */
+  isPlayerGatheringResource(playerId: string, resourceId: string): boolean {
+    const session = this.activeGathering.get(playerId as PlayerID);
+    if (!session) return false;
+    const normalizedResourceId = createResourceID(resourceId);
+    return session.resourceId === normalizedResourceId;
+  }
+
+  /**
    * Cleanup when system is destroyed
    * Clears all active sessions, resources, and rate limits
    */

@@ -30,9 +30,6 @@ const DEFAULT_CHAIN_ID = 97;
 const DEFAULT_ADMIN_PRIVATE_KEY =
   "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
-const MAX_UINT256 =
-  0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffn;
-
 function parseDotEnv(body: string): Record<string, string> {
   const result: Record<string, string> = {};
   for (const rawLine of body.split("\n")) {
@@ -134,11 +131,7 @@ async function main(): Promise<void> {
   const clobDeployTx = await walletClient.deployContract({
     abi: goldClobArtifact.abi,
     bytecode: goldClobArtifact.bytecode as `0x${string}`,
-    args: [
-      goldTokenAddress as Address,
-      adminAccount.address as Address,
-      adminAccount.address as Address,
-    ],
+    args: [adminAccount.address as Address, adminAccount.address as Address],
   });
   const clobDeployReceipt = await publicClient.waitForTransactionReceipt({
     hash: clobDeployTx,
@@ -156,15 +149,6 @@ async function main(): Promise<void> {
     account: adminAccount,
   });
   await publicClient.waitForTransactionReceipt({ hash: mintTx });
-
-  const approveTx = await walletClient.writeContract({
-    address: goldTokenAddress as Address,
-    abi: mockErc20Artifact.abi,
-    functionName: "approve",
-    args: [goldClobAddress as Address, MAX_UINT256],
-    account: adminAccount,
-  });
-  await publicClient.waitForTransactionReceipt({ hash: approveTx });
 
   const createMatchTx = await walletClient.writeContract({
     address: goldClobAddress as Address,
@@ -192,6 +176,14 @@ async function main(): Promise<void> {
       seedOrderPrice,
       parseUnits(seedOrderAmountUi, 18),
     ],
+    value: (() => {
+      const amount = parseUnits(seedOrderAmountUi, 18);
+      const priceComp = BigInt(1000 - seedOrderPrice);
+      const cost = (amount * priceComp) / 1000n;
+      const tradeTreasuryFee = cost / 100n;
+      const tradeMarketMakerFee = cost / 100n;
+      return cost + tradeTreasuryFee + tradeMarketMakerFee;
+    })(),
     account: adminAccount,
   });
   await publicClient.waitForTransactionReceipt({ hash: seedOrderTx });
@@ -232,7 +224,6 @@ async function main(): Promise<void> {
           tokenDeployTx,
           clobDeployTx,
           mintTx,
-          approveTx,
           createMatchTx,
           seedOrderTx,
         },

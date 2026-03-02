@@ -312,7 +312,7 @@ export async function spawnModelAgents(
 
   // Load shared plugins
   const modelAgentSqlEnabled = !/^(0|false|no|off)$/i.test(
-    process.env.MODEL_AGENT_SQL_ENABLED || "true",
+    process.env.MODEL_AGENT_SQL_ENABLED || "false",
   );
   const sqlPlugin = modelAgentSqlEnabled
     ? await loadSqlPlugin("ModelAgentSpawner")
@@ -492,19 +492,27 @@ export async function spawnModelAgents(
         // Prevent ensureEmbeddingDimension from taking > 30s due to API timeouts/rate limits
         runtimeInstance.ensureEmbeddingDimension = async () => {
           try {
+            let timeoutId: ReturnType<typeof setTimeout> | null = null;
             // Give the API 5 seconds to reply
-            await Promise.race([
-              AgentRuntime.prototype.ensureEmbeddingDimension.call(
-                runtimeInstance,
-              ),
-              new Promise((_, reject) =>
-                setTimeout(
-                  () =>
-                    reject(new Error("Embedding dimension check timed out")),
-                  5000,
+            try {
+              await Promise.race([
+                AgentRuntime.prototype.ensureEmbeddingDimension.call(
+                  runtimeInstance,
                 ),
-              ),
-            ]);
+                new Promise((_, reject) => {
+                  timeoutId = setTimeout(
+                    () =>
+                      reject(new Error("Embedding dimension check timed out")),
+                    5000,
+                  );
+                }),
+              ]);
+            } finally {
+              if (timeoutId) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
+              }
+            }
           } catch (err) {
             console.warn(
               `[ModelAgentSpawner] ensureEmbeddingDimension failed or timed out: ${errMsg(err)}. Using fallback 1536.`,
