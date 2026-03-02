@@ -109,6 +109,7 @@
     "duel:prod:logs": "npx pm2 logs hyperscape-duel",
     "duel:prod:status": "npx pm2 status",
     "duel:verify": "bun scripts/verify-duel-stack.mjs",
+    "duel:status": "bash scripts/check-streaming-status.sh",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean && rm -rf test-*.json test-*.png *.log **/*.log test-results packages/docs-site/docs/api",
