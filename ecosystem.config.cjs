@@ -39,10 +39,12 @@ module.exports = {
             // Environment
             env: {
                 NODE_ENV: "production",
-                // Reduce pool size to prevent connection exhaustion during crash loops
-                // Neon serverless has strict limits; lower pool = faster recovery
-                POSTGRES_POOL_MAX: "3",
+                // Aggressively reduce pool size - Neon serverless has very strict limits
+                // Single connection prevents exhaustion during crash loops
+                POSTGRES_POOL_MAX: "1",
                 POSTGRES_POOL_MIN: "0",
+                // Skip DB migrations on startup (already pushed via drizzle-kit)
+                SKIP_MIGRATIONS: "true",
                 STREAMING_DUEL_ENABLED: "true",
                 DUEL_MARKET_MAKER_ENABLED: "true",
                 DUEL_BETTING_ENABLED: "false",
