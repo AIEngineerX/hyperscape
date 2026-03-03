@@ -47,17 +47,26 @@ bun install
 
 # ── Tear down existing processes FIRST (to release DB connections) ──
 echo "[deploy] Tearing down existing processes..."
-# Stop pm2-managed processes first
-bunx pm2 kill 2>/dev/null || true
+
+# Stop pm2-managed processes gracefully first
+bunx pm2 stop all 2>/dev/null || true
+sleep 2
 bunx pm2 delete all 2>/dev/null || true
-# Kill ALL bun/node processes to release database connections
-pkill -9 -f "bun" || true
-pkill -9 -f "node" || true
+sleep 2
+bunx pm2 kill 2>/dev/null || true
+sleep 2
+
+# Kill specific server processes (avoid killing deploy script's bun processes)
+# Target the hyperscape server process specifically, not all bun processes
+pkill -f "hyperscape-duel" || true
 pkill -f "watchdog.sh" || true
 pkill -f "stream-to-rtmp" || true
 pkill -f "turbo.*dev" || true
 pkill -f "chromium" || true
 pkill -f "chrome" || true
+# Kill node processes that might hold DB connections (not bun itself)
+pkill -f "node.*packages/server" || true
+pkill -f "drizzle" || true
 
 # Wait for database connections to be released by Neon pooler
 echo "[deploy] Waiting 30s for database connections to clear..."
