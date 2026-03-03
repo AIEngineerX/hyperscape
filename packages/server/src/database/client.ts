@@ -175,21 +175,30 @@ function resolveMigrationsFolder(): string {
 }
 
 /**
- * Detect if connection string is for a serverless database (Neon, Supabase, etc.)
- * These require special handling for connection management
+ * Detect if connection string is for a serverless/managed database
+ * These require special handling for connection management:
+ * - Lower max connections (managed DBs have strict limits)
+ * - Shorter idle timeouts
+ * - Keepalive enabled
  */
 function isServerlessDatabase(connectionString: string): boolean {
   return (
     connectionString.includes("neon.tech") ||
     connectionString.includes("supabase.co") ||
     connectionString.includes("pooler") ||
-    connectionString.includes("-pooler.")
+    connectionString.includes("-pooler.") ||
+    connectionString.includes(".rlwy.net") || // Railway proxy
+    connectionString.includes(".railway.app") // Railway direct
   );
 }
 
-/** Detect Supabase Supavisor pooler which doesn't support prepared statements */
+/** Detect if using a connection pooler that doesn't support prepared statements */
 function isSupavisorPooler(connectionString: string): boolean {
-  return connectionString.includes("pooler.supabase.com");
+  return (
+    connectionString.includes("pooler.supabase.com") ||
+    connectionString.includes("pgbouncer=true") ||
+    connectionString.includes(".proxy.rlwy.net") // Railway proxy uses pgbouncer
+  );
 }
 
 function parseOptionalInt(value: string | undefined): number | undefined {
