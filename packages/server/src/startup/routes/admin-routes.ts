@@ -1830,6 +1830,84 @@ export function registerAdminRoutes(
     },
   );
 
+  /**
+   * POST /admin/graceful-restart
+   * Request a graceful server restart after the current duel ends.
+   * PM2 will automatically restart the server when it receives SIGTERM.
+   *
+   * Use this to deploy new code without interrupting an active duel.
+   */
+  fastify.post(
+    "/admin/graceful-restart",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const { getStreamingDuelScheduler } =
+          await import("../../systems/StreamingDuelScheduler/index.js");
+        const scheduler = getStreamingDuelScheduler();
+
+        if (!scheduler) {
+          // No scheduler, restart immediately
+          setTimeout(() => {
+            process.kill(process.pid, "SIGTERM");
+          }, 500);
+          return reply.send({
+            success: true,
+            message: "Graceful restart triggered (no active scheduler)",
+            pendingRestart: true,
+          });
+        }
+
+        const scheduled = scheduler.requestGracefulRestart();
+        const cycle = scheduler.getCurrentCycle();
+
+        return reply.send({
+          success: true,
+          message: scheduled
+            ? cycle?.phase === "FIGHTING" || cycle?.phase === "RESOLUTION"
+              ? `Graceful restart scheduled after current duel (phase: ${cycle.phase})`
+              : "Graceful restart triggered"
+            : "Graceful restart already pending",
+          pendingRestart: scheduler.isPendingRestart(),
+          currentPhase: cycle?.phase ?? "IDLE",
+        });
+      } catch (error) {
+        return reply.code(500).send({
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to request graceful restart",
+        });
+      }
+    },
+  );
+
+  /**
+   * GET /admin/restart-status
+   * Check if a graceful restart is pending
+   */
+  fastify.get(
+    "/admin/restart-status",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const { getStreamingDuelScheduler } =
+          await import("../../systems/StreamingDuelScheduler/index.js");
+        const scheduler = getStreamingDuelScheduler();
+
+        return reply.send({
+          pendingRestart: scheduler?.isPendingRestart() ?? false,
+          currentPhase: scheduler?.getCurrentCycle()?.phase ?? "IDLE",
+        });
+      } catch {
+        return reply.send({
+          pendingRestart: false,
+          currentPhase: "UNKNOWN",
+        });
+      }
+    },
+  );
+
   // ──────────────────────────────────────────────────────────────────────────
   // Duel & Agent Control Endpoints
   // ──────────────────────────────────────────────────────────────────────────

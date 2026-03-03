@@ -147,6 +147,9 @@ export class StreamingDuelScheduler {
   /** Scheduler state for state machine */
   private schedulerState: "IDLE" | "WAITING_FOR_AGENTS" | "ACTIVE" = "IDLE";
 
+  /** Whether a graceful restart is pending (waits for current duel to end) */
+  private _pendingGracefulRestart = false;
+
   // ---- Streaming State Cache (Memory Optimization) ----
   /** Cached streaming state to avoid recreating objects every 500ms */
   private _cachedStreamingState: StreamingStateUpdate | null = null;
@@ -350,6 +353,61 @@ export class StreamingDuelScheduler {
   /** Get current cycle (public accessor) */
   getCurrentCycle(): StreamingDuelCycle | null {
     return this.currentCycle;
+  }
+
+  /**
+   * Request a graceful server restart after the current duel ends.
+   * The server will complete the current FIGHTING/RESOLUTION phase,
+   * then trigger a SIGTERM to allow PM2 to restart it with new code.
+   *
+   * @returns Whether the restart was scheduled (false if already pending)
+   */
+  requestGracefulRestart(): boolean {
+    if (this._pendingGracefulRestart) {
+      Logger.info("StreamingDuelScheduler", "Graceful restart already pending");
+      return false;
+    }
+
+    this._pendingGracefulRestart = true;
+    const phase = this.currentCycle?.phase ?? "IDLE";
+
+    if (phase === "IDLE" || phase === "ANNOUNCEMENT") {
+      // No active duel, restart immediately
+      Logger.info(
+        "StreamingDuelScheduler",
+        "No active duel, triggering immediate graceful restart",
+      );
+      this.triggerGracefulRestart();
+    } else {
+      Logger.info(
+        "StreamingDuelScheduler",
+        `Graceful restart scheduled after current duel (phase: ${phase})`,
+      );
+    }
+
+    return true;
+  }
+
+  /**
+   * Check if a graceful restart is pending
+   */
+  isPendingRestart(): boolean {
+    return this._pendingGracefulRestart;
+  }
+
+  /**
+   * Trigger the actual graceful restart by sending SIGTERM to self.
+   * PM2 will handle the restart.
+   */
+  private triggerGracefulRestart(): void {
+    Logger.info(
+      "StreamingDuelScheduler",
+      "Triggering graceful restart (SIGTERM)",
+    );
+    // Give a moment for logs to flush
+    setTimeout(() => {
+      process.kill(process.pid, "SIGTERM");
+    }, 500);
   }
 
   /** Initialize the streaming duel scheduler */
@@ -1243,6 +1301,16 @@ export class StreamingDuelScheduler {
         // Wait for inter-cycle delay so spectators see a clean arena reset
         setTimeout(() => {
           this._endCycleInProgress = false;
+
+          // Check for pending graceful restart
+          if (this._pendingGracefulRestart) {
+            Logger.info(
+              "StreamingDuelScheduler",
+              "Duel cycle complete, triggering pending graceful restart",
+            );
+            this.triggerGracefulRestart();
+            return;
+          }
 
           // Start new cycle if enough agents are available
           if (this.matchmaking.availableAgents.size >= config.minAgents) {
