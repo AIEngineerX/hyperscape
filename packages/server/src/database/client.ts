@@ -188,16 +188,24 @@ function isServerlessDatabase(connectionString: string): boolean {
     connectionString.includes("pooler") ||
     connectionString.includes("-pooler.") ||
     connectionString.includes(".rlwy.net") || // Railway proxy
-    connectionString.includes(".railway.app") // Railway direct
+    connectionString.includes(".railway.app") || // Railway direct
+    connectionString.includes(".railway.internal") || // Railway internal
+    process.env.RAILWAY_ENVIRONMENT !== undefined // Railway environment variable
   );
 }
 
 /** Detect if using a connection pooler that doesn't support prepared statements */
 function isSupavisorPooler(connectionString: string): boolean {
+  // Railway proxy uses pgbouncer - detect via env var or URL patterns
+  const isRailwayProxy =
+    process.env.RAILWAY_ENVIRONMENT !== undefined ||
+    connectionString.includes(".proxy.rlwy.net") ||
+    connectionString.includes(".railway.internal");
+
   return (
     connectionString.includes("pooler.supabase.com") ||
     connectionString.includes("pgbouncer=true") ||
-    connectionString.includes(".proxy.rlwy.net") // Railway proxy uses pgbouncer
+    isRailwayProxy
   );
 }
 
