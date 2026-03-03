@@ -45,22 +45,7 @@ echo "[deploy] Installing dependencies..."
 export CI=true
 bun install
 
-# ── Build core packages ──────────────────────────────────────
-echo "[deploy] Building core dependencies..."
-cd packages/physx-js-webidl && bun run build && cd ../..
-cd packages/decimation && bun run build && cd ../..
-cd packages/impostors && bun run build && cd ../..
-cd packages/procgen && bun run build && cd ../..
-cd packages/asset-forge && bun run build:services && cd ../..
-cd packages/shared && bun run build && cd ../..
-
-# ── Database migration ────────────────────────────────────────
-echo "[deploy] Pushing database schema..."
-cd packages/server
-bunx drizzle-kit push --force
-cd ../..
-
-# ── Tear down existing processes ──────────────────────────────
+# ── Tear down existing processes FIRST (to release DB connections) ──
 echo "[deploy] Tearing down existing processes..."
 # Stop pm2-managed processes first
 bunx pm2 kill 2>/dev/null || true
@@ -77,6 +62,21 @@ pkill -f "chrome" || true
 # Wait for database connections to be released by Neon pooler
 echo "[deploy] Waiting 30s for database connections to clear..."
 sleep 30
+
+# ── Build core packages ──────────────────────────────────────
+echo "[deploy] Building core dependencies..."
+cd packages/physx-js-webidl && bun run build && cd ../..
+cd packages/decimation && bun run build && cd ../..
+cd packages/impostors && bun run build && cd ../..
+cd packages/procgen && bun run build && cd ../..
+cd packages/asset-forge && bun run build:services && cd ../..
+cd packages/shared && bun run build && cd ../..
+
+# ── Database migration (after connections cleared) ────────────
+echo "[deploy] Pushing database schema..."
+cd packages/server
+bunx drizzle-kit push --force
+cd ../..
 
 # ── Start socat port proxies ─────────────────────────────────
 echo "[deploy] Starting port proxies..."
