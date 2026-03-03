@@ -17,8 +17,8 @@ echo "[deploy] Starting Hyperscape CI/CD update on Vast.ai..."
 # ── Pull latest code ──────────────────────────────────────────
 echo "[deploy] Pulling latest code..."
 git fetch origin
-git reset --hard origin/hackathon
-git pull origin hackathon
+git reset --hard origin/main
+git pull origin main
 
 # ── Install system dependencies (needed for native modules) ───
 echo "[deploy] Installing system build dependencies..."
